@@ -1,0 +1,245 @@
+---
+title: "Classification Trees and Random Forests"
+output: 
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #for importance plots
+library(pROC) #for ROC curves
+library(plotROC) #for plotting ROC curves
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+library(rattle) #weather data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+## Example
+
+Our goal is to classify types of urban land cover using a “high resolution aerial image”. Data from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Urban+Land+Cover) include the observed type of land cover (determined by human eye) and “spectral, size, shape, and texture information” computed from the image. Imagine that the data are originally images like this:
+
+![Image credit: https://www.maptiler.com/news/2018/09/first-batch-of-high-res-satellite-imagery-in-maptiler-cloud/](https://www.maptiler.com/media/2018-09-17-first-batch-of-high-res-satellite-imagery-in-maptiler-cloud-1.png)
+
+
+Then, those images are turned into numerical variables. 
+
+The goal is to classify the the type of land, `class`, using the predictors in the dataset. **Why can't we use logistic regression?** It might help to see how many types of land there are:
+
+```{r}
+land <- read_csv("https://www.macalester.edu/~ajohns24/data/land_cover.csv")
+
+land %>% 
+  group_by(class) %>% 
+  count() %>% 
+  arrange(desc(n))
+```
+
+
+## The basics of classification trees
+
+Goal: Classify objects into one or more categories or groups using binary splits/rules that end in a classification. These ending places are called nodes or sometimes leaves.
+
+How?: Splits are chosen to maximize node "purity", ie. create the biggest discrimination between classes. Splits are made until the subgroups reach a minimum size or until no improvement can be made.
+
+What is purity? And how can we measure it? One way is the **Gini Index**. The Gini index for a specific node, *m*, is defined as
+
+$$
+G_m = \sum_{k=1}^K \hat{p}_{mk}(1-\hat{p}_{mk}),
+$$
+
+where $K$ is the number of classes and $\hat{p}_{mk}$ is the proportion of observations in the *m*th node that are from the *k*th class.
+
+When will the Gini index be small?
+When will it be 0?
+
+The splits are chosen to minimize a weighted average of the Gini index
+
+$$
+\sum_{m=1}^M Gm \Big( \frac{\# \text{ cases in node } m}{\text{total cases}} \Big)
+$$
+
+
+## Using `caret`
+
+Fitting the model:
+
+```{r, eval=FALSE}
+set.seed
+
+tree_model <- train(
+  y ~ x,
+  data = ___,
+  method = "rpart",
+  tuneGrid = data.frame(cp = ___),
+  trControl = trainControl(method = "cv", number = ___),
+  metric = "Accuracy",
+  na.action = na.omit
+)
+```
+
+The `cp` parameter is like $\alpha$ below.
+
+$$
+\text{average Gini index over terminal nodes} + \alpha (\text{total # of terminal nodes})
+$$
+
+Results:
+
+```{r, eval=FALSE}
+#cv accuracy metrics
+tree_model$results
+tree_model$resample #details for each fold
+
+#Examine the results in a plot
+tree_model$results %>% 
+  ggplot(aes(x = cp, y = Accuracy))
+```
+
+
+Display the tree:
+
+You may need to adjust `fig.height` and `fig.width` in the R code chunk options.
+```{r, eval=FALSE}
+rpart.plot(tree_model$finalModel)
+```
+
+
+# Example
+
+**I will post solutions before Thursday.**
+
+## Warm-up
+
+We will just look at `asphalt`, `grass`, and `tree` for now.
+
+```{r}
+land_sub <- land %>% 
+    filter(class %in% c("asphalt","grass","tree")) %>% 
+    mutate(class = fct_drop(class))
+
+land_sub %>% 
+  group_by(class) %>% 
+  count() %>% 
+  arrange(desc(n))
+```
+
+
+There are A LOT of variables in this dataset. So we will limit ourselves to looking at just a couple to start.
+
+* `NVDI`: Normalized Difference Vegetation Index (spectral)
+* `Mean_G`: Green (spectral)
+
+
+1. Using the visualization below, develop a classification tree that can be used to classify an object as `grass` or `tree` based on  `NDVI` alone. Use `geom_vline` to draw vertical lines to indicate your splitting rules. 
+
+```{r}
+land_sub_2 <- land %>% 
+    filter(class %in% c("grass","tree")) %>% 
+    mutate(class = fct_drop(class))
+
+land_sub_2 %>% 
+  mutate(node = ifelse(NDVI > .1, 1,0)) %>% 
+  count(node, class)
+
+ggplot(land_sub_2, aes(x = NDVI, fill = class)) + 
+  geom_density(alpha=0.5)
+```
+
+2. Using the visualization below, develop a classification tree that can be used to classify an object as `asphalt`, `grass` or `tree` based on NDVI alone.
+
+```{r}
+ggplot(land_sub, aes(x = NDVI, fill = class)) + 
+    geom_density(alpha=0.5)
+```
+
+
+3. Using the visualization below, develop a classification tree that can be used to classify an object as `asphalt`, `grass` or `tree` based on `NDVI` and `Mean_G`. Use vertical and horizontal lines to define your splits on the graph below.
+
+```{r}
+ggplot(land_sub, aes(y = NDVI, x = Mean_G, color = class)) + 
+    geom_point() 
+```
+
+4. Use the small set of data below to answer the following questions.
+
+```{r}
+set.seed(15)
+land_sub_2 %>% 
+  select(class, NDVI) %>% 
+  group_by(class) %>% 
+  sample_n(size=3)
+```
+
+Draw trees with the following splits on `NDVI` and calculate the average Gini index of the nodes.
+
+* `NDVI = .3`
+* `NDVI = .2`
+* `NDVI = .1`
+
+Which is the best split? Is there a better one?
+
+## Modeling with `caret`
+
+
+5. Use the `land_sub` dataset to develop a classification tree that can be used to classify an object as `asphalt`, `grass` or `tree` based on `NDVI` and `Mean_G`. Does it agree with the splits you made in problem #3?
+
+6. Use the entire `land` dataset and all possible predictor variables to predict `class`. Examine your results in a plot (`cp` vs. `Accuracy`) and report the best `cp`.  
+
+7. Create a plot of your tree.
+
+8. How could this method be improved? How about a random forest? We will talk about this more on Thursday, but look back at the code for when we did random forests with quantitative response variables. See if you can figure out what needs to change to apply it to a categorical response.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,326 @@
+---
+title: "Clustering"
+output: 
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #for importance plots
+library(pROC) #for ROC curves
+library(plotROC) #for plotting ROC curves
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+library(rattle) #weather data
+library(fivethirtyeight) #candy data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+**Goal:** The goal of clustering is to split the observations into groups such that the observations within each group are similar and the groups are different from one another. 
+
+## K-means clustering
+
+**The idea:**
+
+* Choose the number of clusters, $K$. Call them $C_1, ..., C_K$.  
+* Each observation belongs to one and only one cluster.  
+* Minimize total within cluster variation, $SS_{within}$. Let $p$ be the number of predictors and $\mu_r$ be the centroid for cluster $C_r$ (the average of all the points assigned to cluster $C_r$).
+    - For cluster $C_r$ define within cluster variation as
+
+  $$
+    W(C_r) = \sum_{x_i \in C_r} \sum_{j = 1}^p (x_{ij} - \mu_{jr})^2.
+  $$
+
+    - Then total within cluster variation is
+  $$
+    SS_{within} = \sum_{r=1}^K W(C_r)
+  $$
+
+    - The within cluster variation is the sum of the squared Euclidean distances between each point and the centroid for that cluster.  
+    - The total within cluster variation is the sum of the within cluster variation over all clusters. 
+
+**The algorithm:**
+
+1. Randomly assign a number $1, ..., K$ to each observation. These are their initial clusters.
+2. Iterate until the cluster assignments stop changing:
+    a. For each of the $K$ clusters, compute the cluster centroid, which is the vector of $p$ feature means for the observations in the $k$th cluster.
+    b. Assign each observation to the cluster whose centroid is closest in Euclidean distance.
+  
+There are many K-means algorithms. To learn more see this wikipedia [page](https://en.wikipedia.org/wiki/K-means_clustering) as a starter. 
+  
+## Simple example "by-hand"
+
+We will look at a sample of the famous (infamous?) iris data. We will create three clusters using only `Petal.Length` and `Sepal.Length`.
+
+```{r}
+set.seed(15)
+iris_sub <- iris %>% 
+  sample_n(20)
+
+iris_sub %>% 
+  ggplot(aes(x=Sepal.Length, y=Petal.Length)) +
+  geom_jitter() 
+```
+
+First, we randomly assign the observations to one of three clusters.
+```{r}
+set.seed(20)
+
+iris_I1 <-
+  iris_sub %>% 
+  mutate(I1 = sample(c(1,2,3), size = n(), replace=TRUE),
+         obs = 1:20)
+
+iris_I1 %>% 
+  ggplot(aes(x=Sepal.Length, y=Petal.Length, color=factor(I1))) +
+  geom_jitter() +
+  scale_color_discrete("Cluster") +
+  theme(legend.position = "bottom")
+```
+
+Now, compute the centroids of each cluster.
+```{r}
+centroid1 <-
+  iris_I1 %>% 
+  group_by(I1) %>% 
+  summarize(Sepal.Length.mean = mean(Sepal.Length), 
+         Petal.Length.mean = mean(Petal.Length)) 
+centroid1
+```
+
+Now, let's plot the cluster centroid on the plot of data. Each observation will then be assigned to the cluster whose centroid is closest to it in euclidean distance. Can you guess where each observation will be assigned. CAREFUL! Notice that the axes are quite different. It might help to put them on the same scale so your eyes don't fool you as to where the observation will be assigned. 
+
+```{r}
+ iris_I1 %>% 
+  ggplot() +
+  geom_text(aes(x=Sepal.Length, y=Petal.Length, label=obs), 
+            check_overlap = TRUE,
+            nudge_x = .08) +
+  geom_point(aes(x=Sepal.Length, y=Petal.Length, color=factor(I1))) +
+  geom_point(data = centroid1,
+             aes(x=Sepal.Length.mean, y=Petal.Length.mean, color=factor(I1)), shape = 4) +
+  scale_color_discrete("Cluster") +
+  theme(legend.position = "bottom")
+```
+
+Now, we compute the distances and assign each observation to the cluster with the closest centroid.
+
+```{r}
+iris_I2 <-
+  iris_I1 %>% 
+  select(obs,I1) %>% 
+  complete(obs,I1) %>% 
+  left_join(iris_I1, by="obs") %>% 
+  left_join(centroid1, by = c("I1.x"="I1")) %>% 
+  mutate(dist = sqrt((Sepal.Length - Sepal.Length.mean)^2 +
+                     (Petal.Length - Petal.Length.mean)^2)) %>% 
+  group_by(obs) %>% 
+  summarize(I2 = which.min(dist)) %>% 
+  left_join(iris_I1, by = "obs")
+
+iris_I2
+```
+
+Now, compute the new centroids of each cluster.
+
+```{r}
+centroid2 <-
+  iris_I2 %>% 
+  group_by(I2) %>% 
+  summarize(Sepal.Length.mean = mean(Sepal.Length), 
+         Petal.Length.mean = mean(Petal.Length)) 
+centroid2
+```
+
+And plot the results.
+
+```{r}
+iris_I2 %>% 
+  ggplot() +
+  geom_point(aes(Sepal.Length, y=Petal.Length, color=factor(I2))) +
+  geom_text(aes(x=Sepal.Length, y=Petal.Length, label=obs), 
+            check_overlap = TRUE,
+            nudge_x = .08) +
+  geom_point(aes(x=Sepal.Length.mean, y=Petal.Length.mean, color=factor(I2)),
+             data=centroid2, shape=3) +
+  scale_color_discrete("Cluster") +
+  theme(legend.position = "bottom")
+
+```
+
+Again, we compute the distances and assign each observation to the cluster with the closest centroid.
+
+```{r}
+iris_I3 <-
+  iris_I2 %>% 
+  select(obs,I2) %>% 
+  complete(obs,I2) %>% 
+  left_join(iris_I2, by="obs") %>% 
+  left_join(centroid2, by = c("I2.x"="I2")) %>% 
+  mutate(dist = sqrt((Sepal.Length - Sepal.Length.mean)^2 +
+                     (Petal.Length - Petal.Length.mean)^2)) %>% 
+  group_by(obs) %>% 
+  summarize(I3 = which.min(dist)) %>% 
+  left_join(iris_I2, by = "obs")
+
+iris_I3
+```
+
+Now, compute the new centroids of each cluster.
+
+```{r}
+centroid3 <-
+  iris_I3 %>% 
+  group_by(I3) %>% 
+  summarize(Sepal.Length.mean = mean(Sepal.Length), 
+         Petal.Length.mean = mean(Petal.Length)) 
+centroid3
+```
+
+And plot the results.
+
+```{r}
+iris_I3 %>% 
+  ggplot() +
+  geom_point(aes(Sepal.Length, y=Petal.Length, color=factor(I3))) +
+  geom_text(aes(x=Sepal.Length, y=Petal.Length, label=obs), 
+            check_overlap = TRUE,
+            nudge_x = .08) +
+  geom_point(aes(x=Sepal.Length.mean, y=Petal.Length.mean, color=factor(I3)),
+             data=centroid3, shape=3) +
+  scale_color_viridis_d("Cluster") +
+  theme(legend.position = "bottom")
+
+```
+
+## Try it!
+
+Try doing another iteration of what I did yourself. Even better, try re-writing my code to improve it! 
+
+
+```{r}
+
+```
+
+
+And, for a great visual, check out Naftali Harris's interactive [app](https://www.naftaliharris.com/blog/visualizing-k-means-clustering/). 
+
+
+# Using R
+
+We'll start by using the iris data but only using `Sepal.Length` and `Petal.Length`. 
+
+1. Remember in order to create reproducible results, always `set.seed`.   
+2. We `scale()` the variables ... **why**?
+
+```{r}
+set.seed(2)
+
+km_iris <- kmeans(x = iris %>% select(Sepal.Length, Petal.Length) %>% scale(),
+                  centers = 3, #number of clusters
+                  nstart = 20 #see below
+)
+
+km_iris
+```
+
+The `nstart` argument will create that many initial random assignments and go through the algorithm and choose the best one. Best one is defined as the one with the smallest total within cluster variation. It is a good idea to do this to avoid local opimum solutions.
+
+The `tidy()` function provides a slightly nicer looking output to describe each cluster.
+
+```{r}
+tidy(km_iris)
+```
+
+The `glance()` function gives a nice summary output.
+
+```{r}
+glance(km_iris)
+```
+
+We can create a nice plot of the results using the `augment()` function. It also turns out, there is a variable called `Species` in the dataset and this method does a pretty good job of separating the data into the three species.
+
+```{r}
+augment(km_iris, data = iris) %>% 
+  ggplot(aes(x=Sepal.Length, y=Petal.Length, 
+             color=.cluster, shape=Species)) +
+  geom_point()
+```
+
+But, if I didn't know there were three species in the data, I may not have chosen three clusters. In general:
+
+**How would I make a decision about how many clusters to have? How do I know if the clustering is "good"?**
+
+
+One way people do this is by examining the plot of number of clusters on the x-axis and total within sum of squares (the quantity we're trying to minimize) on the y-axis. In general, this will continue to decrease as the number of clusters increases, eventually equalling zero when the number of clusters is the same as the sample size. 
+
+```{r}
+#total sum of squares, this is what we're trying to minimize
+km_iris %>% glance() %>% pull(tot.withinss)
+```
+
+Below I wrote a loop to compute the total sum of squares for different numbers of clusters. Try creating the plot suggested above using the `tot_wi_ss_df` data. From that plot, **how would you decide a reasonable number of clusters?**
+
+```{r}
+tot_wi_ss <- c()
+
+for (i in 1:9){
+  set.seed(253)
+  tot_wi_ss[i] <- kmeans(x = iris %>% select(Sepal.Length, Petal.Length) %>% scale,
+                         centers = i+1,
+                         nstart = 20) %>% 
+    glance() %>% pull(tot.withinss)
+}
+
+tot_wi_ss_df <- tibble(n_clust = 2:10, tot_wi_ss)
+```
+
+
+# Exercises
+
+1. Use clustering with the entire `iris` dataset. Examine different numbers of clusters. Use the plot of number of clusters on the x-axis and total within sum of squares on the y-axis. How many clusters would you choose?  
+
+2. Find candy clusters using the `candy_rankings` dataset from the `fivethirtyeight` library (search for it in the help to find out about the variables).  
+    a. How will distances be computed for the variables with TRUE/FALSE values? (You can guess for now.)
+    b. Try different numbers of clusters. Ultimately, what is a good number of clusters? 
+    c. How would you describe the different clusters? You can try creating some plots or examine some descriptive statistics. Could you name the different clusters?
+
+3. (OPTIONAL) Try the numbered activities in the 14_clustering_categorical file.
+
+
+

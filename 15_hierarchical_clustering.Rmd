@@ -1,0 +1,182 @@
+---
+title: "Hierarchical Clustering"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #for importance plots
+library(pROC) #for ROC curves
+library(plotROC) #for plotting ROC curves
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+library(rattle) #weather data
+library(fivethirtyeight) #candy data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+**Goal:** The goal of clustering is to split the observations into groups such that the observations within each group are similar and the groups are different from one another. 
+
+## Hierarchical Clustering
+
+In this type of clustering, we start with each observation as its own cluster (a leaf) and slowly combine them until we get to one cluster (a trunk). In the end, a dendrogram is used to help decide a good number of clusters to use.
+
+Here is one example:
+![image credit: http://varianceexplained.org/r/love-actually-network/](http://varianceexplained.org/figs/2015-12-25-love-actually-network/h-1.png)
+
+
+Moving up the tree, fuse similar leaves into branches. The more similar two leaves, the sooner their branches will fuse. The height of the first fusion between two cases’ branches measures the "distance" between them.
+
+### As illustrated by Allison Horst
+
+Allison Horst is the [Artist in Residence at RStudio](https://blog.rstudio.com/2019/11/18/artist-in-residence/) - how cool is that?! The following artwork is done by her and can be found on her [github page](https://github.com/allisonhorst/stats-illustrations/tree/master/other-stats-artwork).
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_1.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_2.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_3.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_4.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_5.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_6.jpg)
+
+![](https://raw.githubusercontent.com/allisonhorst/stats-illustrations/master/other-stats-artwork/cluster_single_linkage_7.jpg)
+
+### And now ... my boring notes
+
+Let's look at an example. Recall the sample of *iris* data.
+
+```{r}
+set.seed(15)
+iris_sub <- iris %>% 
+  sample_n(20) %>% 
+  mutate(obs = 1:20)
+
+iris_sub %>% 
+  ggplot(aes(x=Sepal.Length, y=Petal.Length)) +
+  geom_point() +
+  geom_text(aes(label=obs),
+            nudge_x = .06)
+```
+
+Let's first look at the results, and we'll talk about the details of the algorithm after.
+
+```{r}
+iris_dist <- dist(iris_sub %>% 
+                    select(Petal.Length,Sepal.Length))
+
+#distance matrix - remove # below and run to see it
+#iris_dist 
+
+plot(hclust(iris_dist, "single"), 
+     xlab = "")
+abline(h = 1, col="darkred")
+abline(h = 0, col="darkred")
+```
+
+**QUESTIONS**:
+
+1. Notice that observations 3 & 4 and 6 & 9 are fused at a height of just over zero. How are those two sets of observations similar in the scatterplot?  
+2. Observations 12 and 5 are the last to be fused to another observation. How are those observations "different" in the scatterplot?  
+3. The red lines I drew on the dendrogram represent different "stopping" places, meaning if we chose to stop the clustering there, the final clusters would be those branches it crosses through plus any single observations that have yet to be fused that lie above the line.
+
+
+**The algorithm:**
+
+1. Start with all $n$ observations as their own cluster. 
+2. Compute the Euclidean distance among all ${n\choose{2}} = n(n-1)/2$ pairs of observations (use the `dist()` function in R).
+3. Fuse the observations that are closest. The distance between them is represented as the height they are fused on the dendrogram.
+4. Compute the Euclidean distance among the remaining clusters. This can be done a variety of ways. Two are discussed below.
+  * Complete/maximal linkage: the distance between clusters with more than one observation is the maximal distance. That is, all pairwise distances are computed and the largest one is used.   
+  * Single/minimal linkage: the distance between clusters with more than one observation is the minimal distance. That is, all pairwise distances are computed and the smallest one is used.
+5. Repeat steps 3 and 4 until there is only one cluster, the trunk.
+
+
+### R functions
+
+This is easy to do in R using the `hclust()` function. We need to give this function a "distance object", which is a lower triangular matrix of  Euclidean distances between all pairs of observations. The `dist()` function can create the distance object, and we just need to give that function our dataset with the pertinent variables. Notice I only kept the variables we are interested in using in clustering. If I keep more, it will change the distance object.
+
+```{r}
+iris_dist <- dist(iris_sub %>% 
+                    select(Petal.Length,Sepal.Length))
+
+#distance matrix - remove # below and run to see it
+#iris_dist 
+
+iris_hclust <- hclust(iris_dist, method = "single")
+iris_hclust
+```
+
+Nothing terribly interesting comes from the regular output. The most interesting piece is the dendrogram.
+
+```{r}
+plot(iris_hclust, xlab="Hierarchical Clustering based on Petal Length and Sepal Length")
+abline(h = 1, col="darkred")
+abline(h = 0, col="darkred")
+```
+
+We can also obtain the cluster labels for each observation at a specific cut of the dendrogram.
+
+```{r}
+cutree(iris_hclust, h = 0)
+cutree(iris_hclust, h = 1)
+```
+
+### Exercises
+
+1. Look at the output (rounded) from the `dist()` function that computes the Euclidean distance. Use that to help you create the first 5 fuses of the dendrogram "by hand". Use the single linkage method 
+
+```{r}
+round(dist(iris_sub %>% select(Petal.Length, Sepal.Length)),2)
+```
+
+2. Use the entire `iris` dataset, except the `Species` variable. Perform hierarchical clustering using both single linkage and complete linkage. What differences do you see? How many clusters would you choose? Does your "favorite" number of clusters change by method?
+
+3. Use the `candy_rankings` dataset from the `fivethirtyeight` library and cluster candies together using hierarchical clustering. Try both single and complete linkage. How many clusters would you choose? How do your results compare to the K-means clusters?
+
+4. Should I consider scaling my variables so that they are centered at 0 with a standard deviation of 1? Why?
+ 
+5. How might this method be challenging with a large dataset?
+
+
+

@@ -1,0 +1,222 @@
+---
+title: "Clustering with Categorical Variables"
+output: 
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #for importance plots
+library(pROC) #for ROC curves
+library(plotROC) #for plotting ROC curves
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+library(rattle) #weather data
+library(fivethirtyeight) #candy data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+library(cluster) #for daisy and pam functions
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+## Gower Distance
+
+When the data set has a mix of categorical and quantitative variables, we use the Gower Distance in the clustering algorithm. The similarity between two observations $i$ and $j$, $S_{ij}$ is defined as 
+
+$$
+S_{ij} = \frac{\sum_{k=1}^p s_{ijk}}{\sum_{k=1}^p \delta_{ijk}},
+$$
+
+where $s_{ijk}$ is the distance between observation $i$ and $j$ for variable $k$ and $\delta_{ijk}$ is 1 if observations $i$ and $j$ both have values for variable $k$ and 0 otherwise (ie. if one of them has a missing value for variable $k$). For categorical variables, $s_{ijk}$ is 1 if observations $i$ and $j$ have the same value for variable $k$ and 0 otherwise. For quantitative variables,
+
+$$
+s_{ijk} = 1 - \frac{|x_i - x_j|}{R_k},
+$$
+
+where $x_i$ and $x_j$ are values of variable $k$ for observations $i$ and $j$, respectively and $R_k$ is the range of variable $k$. Observations with the same value, will result in $s_{ijk} = 1$. Observations with very different values will be closer to 0. 
+
+Since $0 \le s_{ijk} \le 1$ for all $k$, then $0 \le S_{ij} \le 1$. The Gower Distance is then defined as $1 - S_{ij}$. The closer to 0, the more similar the observations. The closer to 1, the more dissimilar the observations. It is computed using the `daisy` function in the `cluster` package.
+
+
+## Example
+
+This dataset has three decades of movie data scraped from IMDb.
+
+```{r, message=FALSE}
+#From https://www.kaggle.com/danielgrijalvas/movies/version/2#_=_
+
+movies <- read_csv("https://www.dropbox.com/s/8bf7qvwv79b9cdo/movies.csv?dl=1")
+
+movies_sub <- 
+  movies %>% 
+  select(budget, country, genre, gross, name, 
+         rating, runtime, score, year) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  mutate(budget = ifelse(budget == 0, NA, budget),
+         log_budget = log10(budget),
+         log_gross = log10(gross),
+         obs = 1:n()) %>% 
+  select(-budget, -gross)
+```
+
+Here are some summaries of the data.
+
+```{r}
+movies_sub %>% 
+  count(genre) %>% 
+  arrange(desc(n))
+
+movies_sub %>% 
+  select(-obs) %>% 
+  summarize_if(is.numeric, 
+               funs(max(., na.rm = TRUE)-min(., na.rm = TRUE))) 
+```
+
+(@) "By hand" (you can use R as a calculator), find the Gower Distance between "Napolean Dynamite" and "Juno".
+
+```{r}
+movies_sub %>% 
+  filter(name %in% c("Napoleon Dynamite", "Juno"))
+```
+
+
+(@) Find the distance between "Heathcliff: The Movie" and "Mad Max: Fury Road".
+
+```{r}
+movies_sub %>% 
+  filter(name %in% c("Heathcliff: The Movie", "Mad Max: Fury Road"))
+```
+
+
+The `daisy` function finds all the distances. We can briefly summarize them.
+
+```{r}
+gower_dist <- daisy(movies_sub %>% select(-name),
+                    metric = "gower")
+summary(gower_dist)
+```
+
+We can also find the distance between two specific observations: "If the object is called do, and n the number of observations, then for i < j <= n, the dissimilarity between (row) i and j is do[n*(i-1) - i*(i-1)/2 + j-i]" (from `dissimilarity.object` help)
+
+We can get the observation numbers for the four movies we evaluated:
+
+```{r}
+movies_sub %>% 
+  filter(name %in% c("Juno", "Napoleon Dynamite",
+                     "Heathcliff: The Movie","Mad Max: Fury Road")) %>% 
+  select(name, obs)
+```
+
+
+There are $n=6820$ observations total. Juno is observation 4644 and Napolean Dynamite is observation 3981. Their distance is:
+
+```{r}
+gower_dist[6820*(3981-1) - 3981*(3981-1)/2 + 4644-3981]
+```
+ 
+The Gower Distance between Heathcliff and Mad Max is:
+
+```{r}
+gower_dist[6820*(219-1) - 219*(219-1)/2 + 6382-219]
+```
+
+## Clustering
+
+The Gower Distance matrix is then used in the clustering algorithm, Partitioning Around Medoids (`pam()`), to group together similar observations. 
+
+Algorithm:
+
+1. Select $k$ of the $n$ observations as medoids (representative objects).  
+2. Assign each of the observations to the nearest medoid based on Gower Distance.  
+3. Compute the sum of the pairwise Gower Distance within each cluster. The goal is to minimize
+
+$$
+\text{cost} = \sum_{r=1}^K \sum_{i,j \in C_r} (1 - S_{ij})
+$$
+4. For each medoid, $m$, and each observation $o$, swap $m$ and $o$. Associate each point with the closest medoid and recompute cost. Undo the swap if the cost increased. (Repeat until minimized).
+
+
+Here is an example of applying this to the *movie* dataset using 5 clusters.
+
+```{r}
+pam_fit5 <- pam(gower_dist,
+                diss = TRUE,
+                k = 5,
+                cluster.only = TRUE)
+```
+
+Below, cluster is added to the dataset and the numerical variables are summarized for each cluster. 
+
+(@) Give a nice summary of the categorical variables. And, try to describe the clusters.
+
+```{r}
+movies_sub %>% 
+  mutate(cluster = pam_fit5) %>% 
+  group_by(cluster) %>% 
+  summarize_if(is.numeric, funs(mean(.,na.rm=TRUE)))
+```
+
+
+## How many clusters?
+
+The average silhouette distance, which is a value between -1 and 1, is used to measure how well the data have been clustered. See [wikipedia](https://en.wikipedia.org/wiki/Silhouette_(clustering)) for more info.
+
+Averages near 1 indicate well separated clusters where the observations within the cluster are similar and those observations are different from other clusters. Averages near 0 indicate that the clusters are quite similar to one another. The code below would evaluate 2-6 clusters. It takes awhile to run the code.
+
+```{r, eval=FALSE}
+sil_width <- c(NA)
+
+for(i in 2:6){
+  
+  pam_fit <- pam(gower_dist,
+                 diss = TRUE,
+                 k = i)
+  
+  sil_width[i-1] <- pam_fit$silinfo$avg.width
+  
+}
+
+# Plot sihouette width (higher is better)
+
+plot(2:6, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Avg. Silhouette Width")
+lines(2:6, sil_width)
+```
+
+
+(@) How many clusters would you choose?
+

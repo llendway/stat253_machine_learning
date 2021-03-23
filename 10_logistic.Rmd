@@ -1,0 +1,603 @@
+---
+title: "Logistic Regression"
+output: 
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #for importance plots
+library(pROC) #for ROC curves
+library(plotROC) #for plotting ROC curves
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+library(rattle) #weather data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+![](../images/course_flow_classification.png)
+
+## Logistic model and notation
+
+In linear regression, we modeled the response variable, $y$, directly as a linear combination of the predictor variables. In logistic regression, we model the log-odds that $y=1$ as a linear combination of the predictor variables. 
+
+* The response variable $y$ takes two values, 1 or 0. If it is not coded that way, we (or R) will code it that way. 
+
+* Assume 
+
+  $$
+  y \stackrel{ind}{\sim} Bernoulli(p(X)).
+  $$
+      
+  For those not familiar with the Bernoulli distribution. This means that $y$ takes a value of 1 with probability $p(X)$ and a value of 0 with probability $1-p(X)$.
+
+* Let $p(X) =$ probability that $y=1$ for predictors $X$ (for multiple logistic, this can mean multiple predictors $x_1, x_2, ..., x_k$).
+
+* We use the logit link function to construct a model that is linear in the log-odds scale (note that log is the natural log):
+
+  $$
+  log \Bigg(\frac{p(X)}{1-p(X)}  \Bigg) = \beta_0 + \beta_1x_1 + \beta_2x_2 + ...\beta_k x_k
+  $$
+  Equivalently,
+  
+  $$
+  \frac{p(X)}{1-p(X)} = odds(X) = e^{\beta_0}e^{\beta_1x_1}e^{\beta_2x_2}...e^{\beta_k x_k}
+  $$  
+  and 
+  
+  $$
+  p(X) = \frac{e^{\beta_0 + \beta_1x_1 + \beta_2x_2 + ...\beta_k x_k}}{1 + e^{\beta_0 + \beta_1x_1 + \beta_2x_2 + ...\beta_k x_k}}
+  $$
+
+The equation above with odds on the left gives us a nice way to interpret the exponentiated coefficients, for both categorical and quantitative predictors. 
+
+* If *x_i* is quantitative, then the interpretation is that with all other variables held fixed, a one unit change in *x_i* corresponds to multiplying the odds by $e^{\beta_i}$.  
+* If *x_i* is an indicator variable created from a categorical variable (assume it is a 1 if category = L), then the exponentiated coefficient is an odds ratio. So, with all other variables held fixed, the odds for category L are $e^{\beta_i}$ times the odds for the reference category. 
+* **IMPORTANT**: The odds are always the odds that $y = 1$, so be sure you know which level is coded as a 1 in the response variable. 
+
+## Model fitting
+
+This model is fit by a method called maximim likelihood. I will not go into all the details of that method in this class. But, it finds the coefficients that maximize the equation
+
+$$
+\prod_{i=1}^n p(x_i)^{y_i}(1-p(x_i))^{1-y_i}
+$$
+
+In words, this is multiplying either $p(X)$ or $1-p(X)$ for all observations. It multiplies $p(X)$ when cases are 1's and $1-p(X)$ when cases are 0's. **When will this be large? How large can it be?** 
+
+## Model prediction and evaluation
+
+* Log odds that $y=1$ comes directly from plugging the values of the predictor variables into the logistic regression model.  
+* Transform to odds that $y=1$ by exponentiating  
+* Transform to probability that $y=1$ with  
+  $$
+  p = \frac{odds}{1+odds}
+  $$  
+* Applying a probability threshold gives hard classifications or predicted classifications. For example, classify the observation as a 1 if $p > 0.5$. 
+
+After obtaining the predicted classifications, we can create a table of actual versus predicted classifications, which is called a confusion matrix. There are many interesting things people like to compute from these. See the table below from  [Wikipedia](https://en.wikipedia.org/wiki/Confusion_matrix) page. We will try to focus on just a few.
+
+![](../images/confusion_matrix.png)
+
+* Overall accuracy: out of all cases, fraction of correct (true positives and true negatives) classifications. Default metric used to evaluate our models in using `caret`. 
+* True Positive Rate (TPR) / Sensitivity: out of the cases that are truly positive, the fraction of cases correctly classified/predicted as positive  
+* True Negative Rate (TNR) / Specificity: out of the cases that are truly negative, the fraction of cases correctly classified/predicted as negative.  
+* No information rate (NIR): The fraction of cases that are in the "majority" class. 
+* We will also explore how to look at many different probability thresholds through another evaluation tool: the ROC curve (receiver operating characteristic) and also AUC (area under the ROC curve).
+
+# Implementing in `caret`
+
+
+## Fitting the Model
+
+```{r, eval=FALSE}
+set.seed(___)
+
+# Perform logistic regression
+logistic_model <- train(
+    y ~ x,
+    data = ___,
+    method = "glm",
+    family = "binomial",
+    trControl = trainControl(method = "cv", number = ___),
+    metric = "Accuracy",
+    na.action = na.omit
+)
+```
+
+
+argument | meaning
+-------- | -------- | -------------
+`y ~ x1 + ... + xp` | model formula
+`data` | training data after splitting into train and test 
+`method` | model fitting method - `glm` implements various generalized linear models, of which logistic regression is one 
+`family` | Using `family = "binomial"` fits logistic regression models (`family = "gaussian"` is equivalent to `method = "lm"`)
+`trControl` | how to split the data using the `trainControl` function. We continue to use `method = "cv"` and `number` is the number of folds
+`metric` | Accuracy will be used to evaluate models
+`na.action` | how to treat missing values, `na.omit` will remove any row with missing values
+
+## Examining coefficients
+
+```{r, eval=FALSE}
+#model output
+summary(logistic_model)
+
+#cv accuracy metrics
+logistic_model$results
+logistic_model$resample #details for each fold
+```
+
+
+## Predicting and evaluation
+
+The `newdata` can be either a small dataset you create or it can be a test dataset or something like that. 
+
+```{r, eval=FALSE}
+# Make PROBABILITY predictions
+predict(logistic_model, newdata = ___, type = "prob")
+
+# Make CLASSIFICATIONS (using a default 0.5 probability threshold). This is the default if you don't include type.
+predict(logistic_model, newdata = ___, type = "raw")
+
+# Confusion matrix (using a default 0.5 probability threshold)
+# Reference is the response variable from the training data
+# In the positive argument, specify the category of interest (eg: "Yes", "1", "pass")
+classifications <- predict(logistic_model, newdata = predict_data, type = "raw")
+confusionMatrix(data = classifications, 
+  reference = ___, 
+  positive = ___)
+```
+
+
+## Example
+
+This example will use weather data on more than 3,000 days in Sydney, Australia to classify whether or not it will rain the following day (`RainTomorrow`) by the humidity levels at 3pm (`Humidity3pm`) and the number of hours of bright sunshine in the day (`Sunshine`). The data come from the `rattle` library.
+
+
+First, we load the data and split it into a train and test set. Notice the new argument in `initial_split`, `strata = RainTomorrow`. This assures that ther is approximately the same proportion of yeses and nos in the test and training data.
+
+```{r}
+#load and process weather data for Sydney
+data("weatherAUS")
+
+set.seed(253)
+sydney_split <- weatherAUS %>% 
+  filter(Location == "Sydney") %>% 
+  initial_split(prop = .7, strata = RainTomorrow)
+
+sydney_train <- training(sydney_split)
+sydney_test <- testing(sydney_split)
+
+table(sydney_train$RainTomorrow) %>% 
+  prop.table()
+
+table(sydney_test$RainTomorrow) %>% 
+  prop.table()
+```
+
+
+### Fitting the Model
+
+Now, we will fit a logistic model to the training data. I added the `as.factor()` around the response variable just to remind you that you sometimes need to do that if the variable is not already a factor or a 0/1 variable. Also, odds and probabilies are in terms of the `Yes` level since it is second alphabetically. So, we predict the odds or probability that it does rain tomorrow. 
+
+```{r}
+# Set the seed
+set.seed(253)
+
+# Run the model
+sydney_logistic1 <- train(
+    as.factor(RainTomorrow) ~ Humidity3pm + Sunshine,
+    data = sydney_train,
+    method = "glm",
+    family = "binomial",
+    trControl = trainControl(method = "cv", number = 5),
+    metric = "Accuracy",
+    na.action = na.omit
+)
+
+# Model output
+
+summary(sydney_logistic1) %>% 
+  coef() %>% 
+  tidy() %>% 
+  select(`.rownames`, Estimate) %>% 
+  mutate(exp_coef = exp(Estimate))
+```
+
+This implies that increasing the relative humidity by 1 unit multiplies the odds of rain tomorrow by 1.05 (increases by 5.0\%), accounting for sunshine hours, and accounting for humidity increasing sunshine hours by 1 multiplies the odds of rain tomorrow by 0.79 (decreases by 21\%).
+
+### Basic Model Evaluation
+
+Let's take a look at the cross-validation results.
+
+```{r}
+sydney_logistic1$results
+```
+
+We see that the accuracy is about 82\%. Is that good or bad? One way to put this number in perspective is to compare it to the no information rate (NIR), the fraction of cases that are in the "majority" class. 
+
+A really basic model would be to just assign all observations to the majority class. In this case the majority class is "No" which occurs just over 75\% of the time. Using the model that assigns all observations to the majority class would have an accuracy of 75\%. So, if our model is any good, the accuracy definitely should be larger than that. 
+
+Also, remember that this accuracy rate is the cross-validated accuracy rate, which is the average accuracy rate over all the folds, as verified below.
+
+```{r}
+sydney_logistic1$resample
+
+sydney_logistic1$resample %>% 
+  summarize(cv_accuracy = mean(Accuracy))
+```
+
+Let's see how well we predict a small sample of observations.
+
+```{r, results='asis'}
+#create a small sample
+
+small_samp <- sydney_train %>% 
+  slice(1:10) %>%  #first ten observations
+  select(RainTomorrow, Humidity3pm, Sunshine)
+
+#add predicted probabilities and "hard" predictions
+small_samp1 <- small_samp %>% 
+  bind_cols(predict(sydney_logistic1, newdata = small_samp, type = "prob")) %>% 
+  mutate(pred_class = predict(sydney_logistic1, newdata = small_samp, type = "raw")) 
+
+small_samp1
+
+#Alternatively, if we only want predicted probability of 1 (which is what we usually want), we can get that this way, but this requires us to use type = "response" in the predict() function.
+small_samp2 <- small_samp %>% 
+  mutate(pred_class = predict(sydney_logistic1, 
+                              newdata = small_samp, 
+                              type = "raw"),
+         pred_prob = predict(sydney_logistic1$finalModel, 
+                             newdata = small_samp, 
+                             type = "response")) 
+
+small_samp2
+```
+
+
+And, let's create a confusion matrix for predictions on the entire training dataset.
+
+```{r}
+confusionMatrix(data = predict(sydney_logistic1, type = "raw"), #predictions
+                reference = sydney_train$RainTomorrow, #actuals
+                positive = "Yes") 
+```
+
+Notice in the output above, the Sensitivity (True Positive Rate) is only 0.50 whereas the Specificity (True Negative Rate) is almost 0.93. So, of the days where it truly rains tomorrow, this model only predicts it will rain 50\% of the time. Of the days where it does not rain tomorrow, it predicts it will not rain about 93\% of the time. Which of these do we care about more, in this case, do you think? 
+
+
+### More Model Evaluation
+
+Let's explore what happens if we use different cutoff values. This will require us to do some work by hand. **Describe what the code below is doing.**
+
+```{r}
+preds <- sydney_train %>% 
+  mutate(pred_prob = predict(sydney_logistic1$finalModel, 
+                             newdata = sydney_train, 
+                             type = "response"),
+         pred_class = factor(ifelse(pred_prob > .4, "Yes", "No")))
+
+preds
+```
+
+**With this new cutoff value, what will happen to the sensitivity (true positive rate, proportion of days where it actually rains tomorrow that are classified as raining tomorrow) and specificity (true negative rate, proportion of days where it actually doesn't rain tomorrow that are classified as not raining tomorrow) compared to using the 0.5 cutoff?** Try figuring this out on your own first. Then, scroll down to see the solution.
+
+```{r}
+
+```
+
+
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+```{r}
+#using confusionMatrix()
+confusionMatrix(data = preds$pred_class, #predictions
+                reference = preds$RainTomorrow, #actuals
+                positive = "Yes") 
+
+
+#Computing Sensitivity / True Positive Rate by hand (we'll use this code in a bit for writing a function)
+preds %>% 
+    mutate(pred_pos = pred_prob > .4) %>% 
+    filter(RainTomorrow == "Yes") %>% 
+    summarize(tpr = mean(pred_pos, na.rm = TRUE)) 
+```
+
+
+The *False Positive Rate* is 1-(True Negative Rate) or 1-Specificity. It is the proportion of cases that are actually negative that are classified as positive (ie. they are falsely classified as positive). In our models, we ideally want both the True Positive Rate and True Negative Rate to be close to 1.  The True Negative Rate being close to 1 is equivalent to the False Positive Rate being close to 0. 
+
+We will explore how changing the cutoff affects the False Positive Rate and True Positive Rate.
+
+First, we will create functions that compute the True Positive Rate and False Positive Rate. **Compare this code to the "by-hand" calculation I did above. Any questions?**
+
+```{r}
+true_pos_rate <- function(cutoff, actual_class, pred_prob, positive){
+  tibble(pred_prob = pred_prob,
+         actual_class = actual_class) %>% 
+    mutate(pred_pos = pred_prob > cutoff) %>% 
+    filter(actual_class == positive) %>% 
+    summarize(tpr = mean(pred_pos, na.rm = TRUE)) %>% 
+    pull(tpr)
+}
+
+false_pos_rate <- function(cutoff, actual_class, pred_prob, positive){
+  tibble(pred_prob = pred_prob,
+         actual_class = actual_class) %>% 
+    mutate(pred_pos = pred_prob > cutoff) %>% 
+    filter(actual_class != positive) %>% 
+    summarize(fpr = mean(pred_pos, na.rm = TRUE)) %>% 
+    pull(fpr)
+}
+
+```
+
+Use these functions to compute TPR and FPR for the Sydney weather data.
+
+```{r}
+#True Positive Rate (Sensitivity)
+true_pos_rate(cutoff = .4, 
+    actual_class = preds$RainTomorrow, 
+    pred_prob = preds$pred_prob, 
+    positive = "Yes")
+
+#False Positive Rate
+false_pos_rate(cutoff = .4, 
+    actual_class = preds$RainTomorrow, 
+    pred_prob = preds$pred_prob, 
+    positive = "Yes")
+
+#True Negative Rate (Specificity)
+1 - false_pos_rate(cutoff = .4, 
+    actual_class = preds$RainTomorrow, 
+    pred_prob = preds$pred_prob, 
+    positive = "Yes")
+```
+
+Next, we will use loops to compute the True Positive Rate and False Positive Rate over a variety of different cutoff values. You will not be required to write code like this on your own, but I explain in below for those who are interested.
+
+* We create empty vectors, `tpr` and `fpr`, where the True Positive Rates and False Positive Rates will be stored for the different cutoff values.  
+* The different cutoff values are stored in the vector called `cutoffs`.  
+* Go through the `for` loop. Starting with the $1^{st}$ element of the `cutoffs` vector (ie. `i = 1`), do the following for each of the $i$ elements of `cutoffs`:  
+    + Compute the True Positive Rate using the `true_pos_rate()` function and store it in the $i^{th}$ element of `tpr`.  
+    + Compute the False Positive Rate using the `false_pos_rate()` function and store it in the $i^{th}$ element of `fpr`.  
+* Make a dataset called `eval_stats` with variables `cutoffs`, `tpr`, and `fpr`. 
+
+```{r}
+tpr <- c()
+fpr <- c()
+cutoffs <- seq(.02,.98,.02)
+
+for (i in 1:length(cutoffs)){
+  tpr[i] <- true_pos_rate(cutoff = cutoffs[i], 
+    actual_class = preds$RainTomorrow, 
+    pred_prob = preds$pred_prob, 
+    positive = "Yes")
+  fpr[i] <- false_pos_rate(cutoff = cutoffs[i], 
+    actual_class = preds$RainTomorrow, 
+    pred_prob = preds$pred_prob, 
+    positive = "Yes")
+}
+
+eval_stats <- tibble(cutoffs, tpr, fpr)
+
+eval_stats
+```
+
+Next, plot True Positive Rate on the x-axis and False Positive Rate on the y-axis. This is called a [Receiver Operating Characteristic](https://en.wikipedia.org/wiki/Receiver_operating_characteristic ) Curve. 
+
+```{r}
+eval_stats %>% 
+  ggplot(aes(x = fpr, y = tpr)) +
+  geom_line() +
+  geom_text(aes(label = cutoffs), size = 2,nudge_y = .01,nudge_x = -.02) +
+  geom_abline(slope = 1, intercept = 0, color = "gray") +
+  labs(x = "False Positive Rate", y = "True Positive Rate")
+```
+
+
+**Guess what?** We don't actually have to do this "by hand" every time. There are some helpful functions we can use from the `plotROC` and `pROC` libraries.
+
+```{r}
+#d = actual status, m = predicted probability
+preds %>% 
+  ggplot(aes(d = RainTomorrow, m = pred_prob)) + 
+  geom_roc(labelround = 2, size = 1,
+           linealpha = .5, pointalpha = .8) +
+  geom_abline(slope = 1, intercept = 0, color = "gray")
+```
+
+**Is this a "good" curve?** To better understand if this is a good curve. Let's compare the curves for two other *fake* models.
+
+First, we create fake predicted probabilities for the two models. Then, we plot the distribution of predicted probabilities for the two models, creating a different curve for the observations where it does rain tomorrow and where it does not. 
+
+```{r, fig.width=10, fig.height=3.5}
+set.seed(10)
+new_preds <- preds %>% 
+  mutate(fake_pred_prob1 = sample(pred_prob),
+         fake_pred_prob2 = ifelse(RainTomorrow == "Yes",
+                              rnorm(n(), mean = .75, sd = .1),
+                              rnorm(n(), mean = .25, sd = .1))
+         )
+
+p1 <- new_preds %>% 
+  drop_na(RainTomorrow) %>% 
+  ggplot(aes(x = fake_pred_prob1, fill = RainTomorrow)) +
+  geom_density(alpha = .5) +
+  guides(fill = FALSE) +
+  labs(title = "Model 1")
+
+p2 <- new_preds %>% 
+  drop_na(RainTomorrow) %>% 
+  ggplot(aes(x = fake_pred_prob2, fill = RainTomorrow)) +
+  geom_density(alpha = .5) +
+  theme(legend.position = "top") +
+  labs(title = "Model 2")
+
+real_model <- new_preds %>% 
+  drop_na(RainTomorrow) %>% 
+  ggplot(aes(x = pred_prob, fill = RainTomorrow)) +
+  geom_density(alpha = .5) +
+  guides(fill = FALSE) +
+  labs(title = "Real Model")
+
+grid.arrange(p1, p2, real_model, nrow = 1)
+
+```
+
+**What do you suppose their ROC curves will look like?** (Don't look ahead!)
+
+
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+```{r, fig.width=10, fig.height=3.5}
+#d = actual status, m = predicted probability
+roc1 <- new_preds %>% 
+  ggplot(aes(d = RainTomorrow, m = fake_pred_prob1)) + 
+  geom_roc(labelround = 2, size = 1,
+           linealpha = .5, pointalpha = .8) +
+  geom_abline(slope = 1, intercept = 0, color = "gray") +
+  labs(title = "Model 1")
+
+roc2 <- new_preds %>% 
+  ggplot(aes(d = RainTomorrow, m = fake_pred_prob2)) + 
+  geom_roc(labelround = 2, size = 1,
+           linealpha = .5, pointalpha = .8) +
+  geom_abline(slope = 1, intercept = 0, color = "gray") +
+  labs(title = "Model 2")
+
+real_roc <- preds %>% 
+  ggplot(aes(d = RainTomorrow, m = pred_prob)) + 
+  geom_roc(labelround = 2, size = 1,
+           linealpha = .5, pointalpha = .8) +
+  geom_abline(slope = 1, intercept = 0, color = "gray") +
+  labs(title = "Real Model")
+
+grid.arrange(roc1, roc2, real_roc, nrow = 1)
+```
+
+
+**So, what does a "good" ROC curve look like? A bad one?**
+
+
+We can compare ROC curves for different models by comparing their *area under the curve*, *AUC*. 
+
+```{r}
+#roc(actual_class ~ predicted_probability)
+#Actual Model
+new_preds %>% 
+  roc(RainTomorrow ~ pred_prob, data=.) %>% 
+  auc()
+
+#Model 1
+new_preds %>% 
+  roc(RainTomorrow ~ fake_pred_prob1, data=.) %>% 
+  auc()
+
+#Model 2
+new_preds %>% 
+  roc(RainTomorrow ~ fake_pred_prob2, data=.) %>% 
+  auc()
+```
+
+The closer the AUC is to 1, the better the classifier. Classifiers that perform no better than chance would have an AUC of 0.5 (like Model 1). We can use ROC curves and their AUC as one way to evaluate classification models. We should have some caution when using them as they can obscure some information. Often ROC curves overlap and different ones will be better in different spots. So, use this along with Accuracy, True Postive Rate, and True Negative Rate.
+
+## Short Exercises
+
+**I will post solutions to these before Thursday.**
+
+We will use the dataset `syndey_train_smaller` for this analysis. I got rid of a few variables that had a lot of missing values and imputed (filled in) the other missing values with the median for that variable.
+
+```{r}
+sydney_train_smaller <- sydney_train %>% 
+  select(-WindGustDir, -WindGustSpeed, 
+         -Cloud9am, -Cloud3pm,
+         -Location, -Date) %>% 
+  impute_median_all()
+```
+
+1. Fit a logistic regression model that uses all the variables to predict `RainTomorrow`.
+
+2. Show the Model Output and interpret the exponentiated coefficient of `Rainfall`. Are there any coefficients that surprise you?
+
+3. What is the cross-validated Accuracy of the model?
+
+4. Describe how you would find the cross-validated True Positive Rate?
+
+5. Create a confusion matrix. How does the Accuracy computed here compare to the cross-validated Accuracy? Why are they different?
+
+6. Create an ROC curve and compute the AUC. How does it compare to the smaller model we fit?
+
+
+
+

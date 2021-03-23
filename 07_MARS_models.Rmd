@@ -1,0 +1,288 @@
+---
+title: "Multivariate Adaptive Regression Splines (MARS)"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse) #for plotting and summarizing
+library(ISLR) #for data
+library(earth) #for MARS
+library(pdp) #for partial dependence plots, MARS models
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(moderndive) #for house_prices dataset
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(glmnet) #for lasso 
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+library(gganimate) #for animating
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+Thus far, we have mainly talked about parametric models, specifically linear models that take the form
+
+$$
+y_i = f(x_i) = \beta_0 + \beta_1 x_{i1} + \beta_2 x_{i2} + ... + \beta_p x_{ip} + \varepsilon_i.
+$$
+
+and we want to estimate the parameters $\beta_0, ..., \beta_p$. This is called a *parametric* model for that reason - we are estimating parameters!
+
+
+## Non-parametric models
+
+Build more flexible models that take the general form
+
+$$
+y_i = f(x_i) + \varepsilon.
+$$
+
+We will make very few assumptions about $f$, which gives much more freedom.
+
+### Two examples
+
+* K-Nearest Neighbors (KNN)  
+* Multivariate Adaptive Regression Splines (MARS)  
+* There are *many* other non-parametric models. This is just to give you a glimpse of what there is to offer.
+
+
+## Multivariate Adaptive Regression Splines (MARS)
+
+**Main idea**: The goal of MARS is to create a piecewise linear model so that the relationship between a predictor and the response can be different for different ranges of the predictor variable. This method can also be extended to multiple predictor variables. 
+
+Here is an example of a MARS model:
+
+```{r, fig.align='center', echo=FALSE}
+set.seed(123)  # for reproducibility
+x <- seq(from = 0, to = 2 * pi, length = 500)
+y <- sin(x) + rnorm(length(x), sd = 0.3)
+df <- data.frame(x, y) %>%
+  filter(x < 6)
+
+set.seed(123)  # for reproducibility
+big_idea <- train(
+  y ~ x,
+  data = df,
+  method = "earth",
+  pmethod = "none",
+  trControl = trainControl(method = "cv", number = 5),
+  tuneGrid = data.frame(degree = 1, nprune = 6)
+)
+
+df %>% 
+  mutate(pred = predict(big_idea) %>% as.vector()) %>% 
+  ggplot(aes(x, y)) +
+  geom_point(size = 1, alpha = .2) +
+  geom_line(aes(y = pred)) +
+  geom_vline(xintercept = big_idea$finalModel$cuts[-1], color = "darkred") +
+  labs(title = "MARS fit")
+```
+
+The black line in this graph is the MARS model with 4 cut points. Between the cut-points a different ordinary least squares line is fit in such a way that there is one continuous function.
+
+**The algorithm**:
+
+* Each data point for each possible predictor is evaluated as a candidate cut-point.  
+* Hinge functions are created for each candidate cut-point. For example, for a cut-point $a$ for variable $x$, define a pair of hinge functions, $h(x-a)$ and $h(a-x)$ as:
+
+$$
+h(x-a) = 
+\begin{cases}
+    x-a,&  x\gt a\\
+    0,              & x \le a
+\end{cases}
+= (x-a) * I(x>a) \\
+h(a-x) = 
+\begin{cases}
+    a-x,&  x\lt a\\
+    0,              & x \ge a
+\end{cases}
+= (a-x) * I(x<a)
+$$
+
+* Estimate coefficients using ordinary least squares
+
+$$
+\begin{align}
+\hat{y} &= \hat{\beta}_0 + \hat{\beta}_1 \Big[(x - a) * I(x>a)\Big] + \hat{\beta}_2 \Big[(a-x) I(x < a)\Big] \\
+&= \hat{\beta}_0 + \hat{\beta}_1 h(x-a) + \hat{\beta}_2 h(a-x)
+\end{align}
+$$
+
+* Compute the RSS (sum of squared residuals) for each of these models. The predictor and cut-point with the smallest RSS is chosen as the best model.  
+
+* After that cut-point is decided, then the rest of the data points for the predictor that was used initially and all other predictors are once again considered as the second cut-point. Once again, the model with the smallest sum of squared residuals, which will have two cut-points, is chosen as the best model. 
+
+* The process continues until some user-defined stopping point is reached. The default is that $R^2$ is increased by less than .001. 
+
+* Then the algorithm goes back to evaluate each of the hinge functions and sequentially removes any that are not contributing, using a statistic called GCV, [generalized cross-validation](https://en.wikipedia.org/wiki/Multivariate_adaptive_regression_spline).
+
+
+### Implementation in `caret`
+
+```{r, eval=FALSE}
+
+set.seed(___)
+
+mars_model <- train(
+  y ~ x, #model formula
+  data = ___,
+  method = "earth",
+#  pmethod = "none",  OPTIONAl for no pruning back
+  trControl = trainControl(method = "cv", number = ___),
+  tuneGrid = data.frame(degree = 1, nprune = ____), 
+  na.action = na.omit
+)
+
+```
+
+* The `method = "earth"` will implement MARS models. 
+
+* We will focus on tuning the `nprune` parameter, which is the number of parameters estimated in the final model, including the intercept term. Note that "The actual number of terms created by the forward pass will often be less than `nprune` because of other stopping conditions." We will always use `degree = 1` which does not allow for any interaction terms.
+
+* The optional `pmethod = "none"` argument creates a MARs model without doing the final pruning step. 
+
+
+```{r eval=FALSE}
+# model results:CV RMSE, etc. for each model are in
+mars_model$results
+
+
+# Identify which tuning parameter (ie. nprune) is "best" 
+mars_model$bestTune
+
+# Get CV measurements for the "best" model
+mars_model$resample
+
+# Use the best MARS model to make predictions
+predict(mars_model, newdata = ___)
+```
+
+
+# Exercises
+
+We will explore MARS models of `Grad.Rate` using the `College` data from the `ISLR` package. Search for it in the help to learn more. We will use the `college_sub` data throughout which has eliminated a couple extreme outliers.  
+
+```{r}
+data(College)
+
+# Wrangle the data
+college_sub <- College %>% 
+  rownames_to_column(var = "school") %>% 
+  filter(Grad.Rate <= 100) %>% 
+  filter((Grad.Rate > 50 | Expend < 40000))
+```
+
+
+1. First, we will use `Expend` to predict `Grad.Rate`. We will evaluate a cut-point by hand and fit a pair of hinge functions using ordinary least squares.
+
+```{r}
+college_sub %>%
+  ggplot(aes(x = Expend, y = Grad.Rate)) +
+  geom_point(size = 1, alpha = .2) +
+  geom_vline(xintercept = 15000, color = "darkred")
+```
+
+
+a. Below, I have created new variables, `Expend_1` $= h(Expend - 15000)$ and `Expend_2` $= h(15000 - Expend$ that are the pair of hinge functions. Use those variables to model `Grad.Rate` using a ordinary least squares regression. 
+
+```{r}
+hinge_data <- college_sub %>% 
+  mutate(Expend_1 = (Expend - 15000)*as.numeric(Expend>15000),
+         Expend_2 = (15000 - Expend)*as.numeric(Expend<15000))
+```
+
+
+b. Plot the resulting model on a graph of `Expend` vs. `Grad.Rate`. Does this seem like a good cut-point? According to the algorithm, how would you compare this cut-point to others? 
+
+
+2. We will now use `caret` to help us with the MARS model. At first, we only use `Expend`. We also set `pmethod = "none"` for this exercise so that the algorithm does not go back through and eliminate any hinge functions. (Don't worry if it gives you a message about missing values.)
+
+```{r}
+set.seed(224)
+
+mars_expend <- train(
+  Grad.Rate ~ Expend, #model formula
+  data = college_sub,
+  method = "earth",
+  pmethod = "none",  #OPTIONAl for no pruning back
+  trControl = trainControl(method = "cv", number = 5),
+  tuneGrid = data.frame(degree = 1, nprune = 2:7), 
+  na.action = na.omit
+)
+```
+
+a. Explore the results. Which tuning parameter seems best and why?
+
+```{r}
+mars_expend$results
+```
+
+b. Look at the number of terms of the "best model". Is this what you expected given what you observed in the previous step? Any ideas why there is a difference? (HINT: go back and read about the algorithm again and see if you can figure it out.) What are the cut-points?
+
+```{r}
+mars_expend$finalModel %>% 
+  coefficients() %>% 
+  tidy()
+```
+
+c. The following code adds the predicted graduation rates to the `college_sub` dataset. Pipe this into `ggplot` and create a graph of `Expend` on the x-axis, `Grad.Rate` on the y-axis, the raw data, and the model. Indicate the cut-points with vertical lines. 
+
+```{r}
+college_sub %>% 
+  mutate(pred = predict(mars_expend) %>% as.vector())
+
+```
+
+
+3. Let's examine a slightly larger model where we also do the pruning at the end to re-evaluate each hinge function. 
+
+```{r}
+set.seed(224)
+
+mars_small <- train(
+  Grad.Rate ~ Expend + Top10perc + P.Undergrad + Room.Board, 
+  data = college_sub,
+  method = "earth",
+#  pmethod = "none",  #OPTIONAl for no pruning back
+  trControl = trainControl(method = "cv", number = 5),
+  tuneGrid = data.frame(degree = 1, nprune = 2:20), 
+  na.action = na.omit
+)
+```
+
+a. Examine the results. Which `nprune` is "best" and why? Create a plot with `nprune` on the x-axis and `RMSE` on the y-axis to back up your statement. Add +/- 1 RMSE standard error lines for an even stronger argument.
+
+```{r}
+mars_small$results
+```
+
+b. Examine the "best" model. Which variables show up in the model? Are you surprised?
+
+```{r}
+mars_small$finalModel %>% 
+  coefficients() %>% 
+  tidy()
+```
+
+c. We can use a partial dependence plots to show the effect of each variable in the model while holding all other variables at their average values. I have done that below for `Top10perc`. Create similar plots for the other variables that occur in the model. Can you predict where the "bends" will occur in the plots?
+
+```{r}
+partial(mars_small, pred.var = "Top10perc", 
+        grid.resolution = 50) %>% 
+  autoplot() 
+```
+
+4. Try a more complex MARS model using more variables, including categorical variables. How are categorical variables treated? What is the best model you can find? What makes it the best?
+

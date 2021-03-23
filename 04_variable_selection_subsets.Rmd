@@ -1,0 +1,282 @@
+---
+title: 'Variable Selection: Subsets'
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r, echo = FALSE}
+library(tidyverse) #for plotting and summarizing
+library(leaps) #NEW, for variable selection
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+theme_set(theme_minimal())
+```
+
+
+# Discussion
+
+
+## Forward stepwise selection
+
+If there are $p$ predictors (really available model terms, but I'll expand on that later), $x_1, x_2, ... , x_p$, the algorithm is:
+
+1. Fit all models with just one predictor (specifically, where we only estimate the intercept and one other coefficient). Choose the one with the highest $R^2$ lowest training RMSE. Call that model $M_1$.  
+2. Keep the predictor from $M_1$ and fit all the models with two predictors (intercept and two other coefficients). Choose the best of these using $R^2$ or training RMSE and call this $M_2$.  
+3. Continue until all variables have been added. There will be p models, $M_1, ..., M_p$.  
+4. Choose the best of these $p$ models using cross validation. **NOTE**, when using cross validation, steps 1-3 are done within the folds. So, each fold of cross-validation may actually choose slightly different models for each of $M_1, ..., M_p$. That's ok! We are using cross-validation to help us find the "best" number of predictor variables to use in the model.  
+5. Once a decision is made on the optimal number of predictors using cross-validation, use forward selection on the *entire* training sample to fit the final model. We will see that the `caret` package will make this easy for us. 
+
+## Questions
+
+1. In groups, go to the board and draw a graphic of how you would implement this algorithm, assuming you could use R but didn't have `caret`. Be specific about how to divide your data, where model fitting occurs, and how you decide a best model. Assume you have 5 quantitative predictor variables.  
+2. How should we handle categorical variables in this process? What "problem" to they pose?  
+3. What do you suppose backward selection is? Do you think it would lead to the same results as forward selection?  
+
+# Exercises
+
+We are once again going to use the `cars2018` data. We'll start by splitting it into the training and testing datasets. 
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+1. In the first exercise, we are only going to use the quantitative predictor variables to try to predict `MPG`. I have created that dataset, `cars_train_num` below. 
+
+```{r}
+cars_train_num <- cars_train %>% 
+  select(-`Model Index`) %>% 
+  select_if(is.numeric)
+```
+
+Just as a reminder, the graphs below show distributions of the quantitative variables in the datatset. 
+
+```{r}
+cars_train_num %>% 
+  pivot_longer(cols = everything(),names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_wrap(vars(variable), scales = "free")
+```
+
+You will work with the people at your table to go through the forward stepwise selection process "by hand" for the particular test fold I assign you. We are going to use the "by hand" cross-validation splitting we used last time, but just with the `cars_train_num` dataset. This variable can have up to 6 variables. For the test fold assigned to you, you should do the following:
+
+a. Find the "best" model with 1 variable, 2 variables, ...., 6 variables using the data without the test fold. 
+
+b. For each of the 6 "best" models, compute the RMSE on your assigned test fold (see the 03_Linear_Model_k_fold_cv file if you need to remember details on how to do this).  
+
+c. Record each of your 6 models and their test RMSE in the corresponding rows in this [spreadsheet](https://docs.google.com/spreadsheets/d/18GtOreKU79fHnf1ZfsaG8CXy7KEUUmsvWyTq10PQv9g/edit?usp=sharing).
+
+```{r}
+fold1_obs <- c(4,6,8,17,23,25,27,28,35,41,45,47,49,57,60,65,70,75,76,82,99,101,107,111,113,115,116,118,121,126,133,136,161,164,184,185,190,191,192,196,201,203,209,213,219,226,229,231,234,236,241,243,244,246,247,259,266,268,271,276,282,291,293,295,297,301,302,305,308,311,312,315,317,327,328,330,332,335,338,341,353,361,370,374,375,376,381,387,389,395,396,403,412,417,421,440,453,460,470,479,480,497,502,505,508,513,515,518,530,532,537,546,549,551,556,560,564,568,572,579,582,585,588,598,612,614,617,622,624,628,634,635,637,638,639,643,644,647,656,657,671,672,677,693,695,702,705,708,711,723,724,734,751,764,765,768,782,795,797,798,801)
+
+fold2_obs <- c(1,3,16,18,20,22,29,30,40,43,46,53,68,72,74,79,83,91,95,97,98,100,102,105,114,125,130,131,134,135,139,140,145,149,150,152,165,167,173,174,178,193,200,204,205,216,221,242,249,256,264,270,280,283,290,303,318,319,321,323,336,342,343,346,350,351,362,366,367,373,378,379,380,382,393,398,399,401,405,408,413,419,429,439,442,443,444,445,465,471,476,478,483,486,492,493,498,499,501,506,512,520,522,527,533,534,535,538,540,542,545,548,555,557,561,565,575,576,578,580,581,586,595,597,599,602,604,605,606,615,621,640,642,651,661,663,669,670,674,682,683,686,687,701,704,713,719,727,731,733,736,737,741,743,762,770,777,796,800)
+
+fold3_obs <- c(9,10,12,14,19,33,36,44,51,54,56,61,62,63,64,69,86,103,112,117,119,120,137,144,151,159,162,163,176,179,181,187,194,202,211,214,215,217,218,222,233,235,237,239,248,252,258,261,262,263,273,278,281,284,287,300,306,310,313,314,320,329,339,352,359,390,392,394,397,402,407,409,411,416,418,423,428,430,434,435,436,446,448,449,452,455,461,466,469,474,481,484,495,496,503,507,509,524,525,526,529,531,539,550,553,554,562,569,574,589,591,594,600,601,607,608,609,610,613,616,620,629,630,631,641,646,653,654,658,660,662,664,666,675,685,689,696,703,707,715,717,721,722,729,735,744,745,746,756,761,763,767,769,771,772,773,779,781,791,792)
+
+fold4_obs <- c(2,5,7,24,31,38,42,48,50,55,66,67,78,81,84,89,92,94,96,104,106,109,127,128,129,132,141,143,147,148,153,157,160,170,177,186,188,189,197,198,199,208,212,223,227,230,238,240,251,255,257,260,265,267,269,274,277,279,286,288,292,294,299,304,324,334,340,344,347,348,349,354,355,356,358,365,369,377,384,386,391,404,414,415,420,424,425,427,437,438,441,447,450,456,457,458,459,462,463,473,475,482,488,494,504,514,516,517,519,523,528,541,552,559,563,566,583,587,590,592,593,603,611,625,626,627,633,636,645,649,655,659,673,679,680,698,699,706,709,712,714,720,726,728,730,732,742,747,749,752,753,755,757,776,778,780,783,784,788,790,799)
+
+fold5_obs <- c(11,13,15,21,26,32,34,37,39,52,58,59,71,73,77,80,85,87,88,90,93,108,110,122,123,124,138,142,146,154,155,156,158,166,168,169,171,172,175,180,182,183,195,206,207,210,220,224,225,228,232,245,250,253,254,272,275,285,289,296,298,307,309,316,322,325,326,331,333,337,345,357,360,363,364,368,371,372,383,385,388,400,406,410,422,426,431,432,433,451,454,464,467,468,472,477,485,487,489,490,491,500,510,511,521,536,543,544,547,558,567,570,571,573,577,584,596,618,619,623,632,648,650,652,665,667,668,676,678,681,684,688,690,691,692,694,697,700,710,716,718,725,738,739,740,748,750,754,758,759,760,766,774,775,785,786,787,789,793,794)
+
+#folds - for testing
+fold1 <- cars_train_num %>% 
+  slice(fold1_obs)
+
+fold2 <- cars_train_num %>% 
+  slice(fold2_obs)
+
+fold3 <- cars_train_num %>% 
+  slice(fold3_obs)
+
+fold4 <- cars_train_num %>% 
+  slice(fold4_obs)
+
+fold5 <- cars_train_num %>% 
+  slice(fold5_obs)
+
+#folds removed - for training
+no_fold1 <- cars_train_num %>% 
+  slice(-fold1_obs)
+
+no_fold2 <- cars_train_num %>% 
+  slice(-fold2_obs)
+
+no_fold3 <- cars_train_num %>% 
+  slice(-fold3_obs)
+
+no_fold4 <- cars_train_num %>% 
+  slice(-fold4_obs)
+
+no_fold5 <- cars_train_num %>% 
+  slice(-fold5_obs)
+```
+
+
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+
+
+2. You will be happy to learn that the `caret` package can once again be a great help. The table below is to help remind you of all the arguments in the functions we use most. I have added a new argument, `tuneGrid`.
+
+function | argument | meaning
+-------- | -------- | -------------
+`trainControl` | `method` | sampling method, usually "cv" 
+`trainControl` | `number` | number of folds in cv 
+`train` | `y ~ x1 + ... + xp` | model formula, like in `lm`
+`train` | `data` | training data after splitting into train and test 
+`train` | `method` | model fitting method 
+`train` | `tuneGrid` | tuning values (in this case # of predictors)
+`train` | `trControl` | how to split the data, from `trainControl` 
+`train` | `na.action` | how to treat missing values, `na.omit` will remove any row with missing values
+
+The code below will do just what we did above by hand. It takes less than 5 seconds to run on my computer. We should take a moment to appreciate that! Notice we are using a new method, `leapForward` (from the `leaps` library so make sure you've installed that), and a new argument `tuneGrid`. Many algorithms we use will have one or more tuning parameters. In this case, our tuning parameter is the number of terms in the model, `nvmax`.
+
+```{r}
+set.seed(100) #for reproducibility
+split <- trainControl(method = "cv", number = 5)
+
+cv_cars_vars <- train(
+  MPG ~ .,
+  data = cars_train_num,
+  method = "leapForward", #NEW method!
+  tuneGrid = data.frame(nvmax = 1:6), #NEW argument!
+  trControl = split,
+  na.action = na.omit
+)
+```
+
+Let's check the `summary()` output. Any idea what this is showing? 
+
+```{r}
+summary(cv_cars_vars)
+```
+
+This will give us the best tuning parameter, that is the tuning parameter with the smallest cross-validated RMSE. This tells us that 3 predictor variables gives the smallest cross-validated RMSE.
+
+```{r}
+cv_cars_vars$bestTune
+```
+
+We can see the cross-validated RMSEs (and some other stats) for all values of `nvmax` in the `results` output. 
+
+```{r}
+cv_cars_vars$results
+```
+
+The `resample` output shows the fold details only for the best `nvmax`.
+
+```{r}
+cv_cars_vars$resample 
+```
+
+So, summarizing the `resample` results gives the 3-variable row from the `results`:
+```{r}
+cv_cars_vars$resample %>% 
+  summarize(cv_error = mean(RMSE),
+            se_cv_error = sd(RMSE))
+```
+
+To see the "best" model, we can use the following code, where the id is the best number of variables.
+
+```{r}
+coefficients(cv_cars_vars$finalModel, id = 3)
+```
+
+Since the last model is fit on the entire training dataset, we would get the same result by fitting the following model:
+
+```{r}
+cv_cars_lm <- lm(MPG ~ Displacement + Gears + `Exhaust Valves Per Cyl`, data = cars_train)
+
+tidy(cv_cars_lm)
+```
+
+
+
+3. Now, use forward stepwise selection with all the variables in the dataset except `Model` and `Model Index`. I've included distributions of the categorical variables below as a reminder. 
+
+```{r}
+cars_train %>% 
+  select(-`Model Index`, -Model) %>% 
+  select_if(is.character) %>% 
+  pivot_longer(cols = everything(),names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_bar() +
+  facet_wrap(vars(variable), scales = "free")
+```
+
+a. I've started the modeling code for you (delete the `eval=FALSE` before knitting). What is the maximum number of terms that could be included in this model? Why? Make sure to think carefully about what happens to the categorical variables.  
+
+```{r, eval=FALSE}
+set.seed(253) 
+split <- trainControl(method = "cv", number = 5)
+
+cv_cars_all_vars <- train(
+  ___ ~ ___,
+  data = ___,
+  method = "___", 
+  tuneGrid = data.frame(nvmax = ___), 
+  trControl = split,
+  na.action = na.omit
+)
+```
+
+
+b. What is the best number of terms to include in the model according to cross-validation RMSE?
+
+c. Print the coefficients and variables of the best model.
+
+d. Use the `results` to create a line graph that plots the number of variables on the x-axis and RMSE on the y-axis. Add two more lines that are $RMSE + \frac{RMSESD}{\sqrt{5}}$ and $RMSE - \frac{RMSESD}{\sqrt{5}}$ on the y-axis and still number of variables on the x-axis. Interpret the take-home message of this plot. 
+
+e. Given what you see in the graph above, might you choose fewer variables? Why or why not? 
+
+f. Look at the "best" model with only two variables (use `id=2` in the `coefficient()` function. What is odd about this model? In general, how would you approach including only some indicator variables from a categorical variable but not all?  
+
+4. Try using backward stepwise selection (`leapBackward`) using all the variables except `Model` and `Model Index`. Do you get the same results as when you use forward selection? Show just enough detail from the output so that you can compare to the results of forward selection.
+
+
+
+
+

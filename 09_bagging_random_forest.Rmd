@@ -1,0 +1,352 @@
+---
+title: "Improving Decision Trees: Bagging and  Random Forests"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+library(vip) #NEW for importance plots
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+library(janitor) #NEW! for nice names
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(randomForest) #for bagging and random forests
+
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+Decision trees have some benefits:
+
+1. Easy to explain.  
+2. Easy to display in a graph. 
+
+But, they are not always robust. That means for small changes in the data, we might see large differences in the trees. We will learn about two *ensemble* methods that can help improve the predictions.
+
+The next sections rely heavily on bootstrapping. For a good review, see section 2.4.2 of [HOML](https://bradleyboehmke.github.io/HOML/process.html#bootstrapping) or check out this [Wikipedia page](https://en.wikipedia.org/wiki/Bootstrapping_(statistics)).  
+
+## Bagging
+
+**B**ootstrap **agg**regat**ing**, or bagging, is a way of "averaging" many different trees built from bootstrap samples of the data. 
+
+Remember, a bootstrap sample is a resample from the original sample of data, *with* replacement. So, some observations are in the bootstrap sample more than once and some observations are not in the bootstrap sample at all. The observations that do not show up in the bootstrap sample are called *out-of-bag* or *OOB*, for short.
+
+![Image Credit: Bradley Boehmke, HOML](../images/bootstrap_HOML.png)
+
+In STAT 155, many of you probably learned how we can use bootstrap samples to get estimates of standard errors and compute confidence intervals for simple estimates, like sample proportions and sample means, and also for more complex estimates like OLS regression coefficients.
+
+How can we apply the bootstrap methodology to decision trees? 
+
+1. Take a bootstrap sample of the data.  
+2. Build a decision tree. Let the tree grow deep, ie. let `cp` be small. We know this makes the trees more variable, but we're going to "average out" the variation.
+3. Repeat steps 1 and 2 many times (at least 50, ideally until the error rate has settled down). Call the number of trees B.
+4. New observations will have a predicted value of the average predicted value from the B trees. So, if $x$ is the observation we want to predict and $\hat{f}_1(x), ..., \hat{f}_B(x)$ are the predictions from each tree, the bagged prediction is
+
+$$
+\frac{1}{B}\sum_{i=1}^B \hat{f}_i(x).
+$$
+
+5. Compute error rate using one of these options
+
+  * Option 1: regular cross-validation RMSE.  
+  * Option 2: *out-of-bag* error (OOB error). Find predicted values for OOB observations by averaging their predicted value for the trees where they were OOB. Then, compute the RMSE. Using OOB error can often be faster, and it is just as good, especially when we have large datasets. 
+  
+## Random Forests
+
+One downside of bagging is that the trees can end up being highly correlated due to a couple highly influential variables that show up near the top of the tree in almost every tree. Random forests try to combat this. Here's an outline of the algorithm.
+
+1. Take a bootstrap sample of the data.
+2. Build a modified decision tree. At each split, only consider a random sample of the $p$ predictors, $m$. A common choice in regression models is $m = p/3$. This will limit how often a dominant predictor can be used and will make the trees less correlated.
+3. Repeat steps 1 and 2 many times (at least 50). Call the number of trees B.
+4. New observations will have a predicted value of the average predicted value from the B trees, just like with the bagging method.  
+5. Compute error rate using one of these options
+
+  * Option 1: regular cross-validation RMSE.  
+  * Option 2: *out-of-bag* error (OOB error). 
+  
+Notice that bagging is a form of random forest with $m=p$.
+
+
+# Implementing in `caret`
+
+First, we load and split the car data. 
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+## Bagging
+
+Here we set `mtry` to 16. This means all 12 predictor variables (16 terms) will be used in splitting, which is what we want for bagging. I have also added some other optional arguments to the function. These all come from the `randomForest()` function which is being run in the background. You can search `randomForest` in the Help window to learn more. 
+
+First, we use cross-validation. **How many trees are built when we use cross-validation?** 
+
+```{r}
+set.seed(327)
+mpg_bagging <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`), 
+  method = "rf",
+  trControl = trainControl(method = "cv",
+                           number = 5),
+  tuneGrid = data.frame(mtry = 16),
+  ntree = 100, #number of trees used, default is 500
+  importance = TRUE, #for importance plots later
+  nodesize = 5, #this is the default terminal node size for regression trees. Could set larger for smaller trees.
+  na.action = na.omit
+)
+```
+
+Quick plot of error (MSE) versus number of trees. We want to be sure this has flattened out, otherwise, we should use more trees. 
+
+```{r}
+plot(mpg_bagging$finalModel)
+```
+
+Similar plot to the one above.
+
+```{r}
+tibble(RMSE = sqrt(mpg_bagging$finalModel$mse),
+       `# of trees` = 1:mpg_bagging$finalModel$ntree) %>% 
+  ggplot(aes(x = `# of trees`, y = RMSE)) +
+  geom_point(size = .3) +
+  geom_line()
+```
+
+
+Results based on cross-validation:
+
+```{r}
+mpg_bagging$results
+```
+
+Detailed fold results:
+
+```{r}
+mpg_bagging$resample
+```
+
+
+Now, let's try the same thing using the OOB estimates for error. **How many trees are fit here?**
+
+```{r}
+set.seed(327)
+mpg_bagging_oob <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`), 
+  method = "rf",
+  trControl = trainControl(method = "oob"),
+  tuneGrid = data.frame(mtry = 16),
+  ntree = 200, #number of trees used, default is 500
+  importance = TRUE, #for importance plots later
+  nodesize = 5, #this is the default terminal node size for regression trees. Could set larger for smaller trees.
+  na.action = na.omit
+)
+```
+
+Quick plot of error (MSE) versus number of trees. We want to be sure this has flattened out, otherwise, we should use more trees. 
+
+```{r}
+plot(mpg_bagging_oob$finalModel)
+```
+
+Results based on OOB. **How does this compare to the cross-validated results?**
+
+```{r}
+mpg_bagging_oob$results
+```
+
+Notice there are no results here because we didn't use resampling. 
+
+```{r}
+mpg_bagging_oob$resample
+```
+
+## Random forest
+
+For random forests, we will always use OOB error because in addition to fitting a lot of trees, we are testing different values of `mtry`. **What is this parameter?**
+
+```{r}
+set.seed(327)
+mpg_randf_oob <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`), 
+  method = "rf",
+  trControl = trainControl(method = "oob"),
+  tuneGrid = data.frame(mtry = c(2,4,6,8,10,12)),
+  ntree = 200, #number of trees used, default is 500
+  importance = TRUE, #for importance plots later
+  nodesize = 5, #this is the default terminal node size for regression trees. Could set larger for smaller trees.
+  na.action = na.omit
+)
+```
+
+Best tuning parameter. 
+
+```{r}
+mpg_randf_oob$bestTune$mtry
+```
+
+Plot of error (MSE) versus number of trees for the best tuning parameter. 
+
+```{r}
+plot(mpg_randf_oob$finalModel)
+```
+
+Results based on OOB.
+
+```{r}
+mpg_randf_oob$results
+```
+
+We can also plot the results using the default plotting method. 
+
+```{r}
+ggplot(mpg_randf_oob)
+```
+
+There are other methods for fitting random forests. Check out the methods in the caret [documentation](https://topepo.github.io/caret/available-models.html). Try searching for `random forest`. I am not familiar with all of these methods. One I have used before is `ranger`, which also offers `min.node.side` tuning paramter. 
+
+## Visualizing the results of bagging and random forests
+
+Unfortunately, one of the things we lose when we switch from basic trees to bagging and random forests, is the lovely visualization. If you have been doing all the reading in HOML, you have probably already seen some variable importance plots. These give us a way to at least understand which variables are most important in the model. I have created one of the plots below. To read more about how they are created see HOML section [10.5](https://bradleyboehmke.github.io/HOML/bagging.html#bagging-vip).
+
+
+```{r}
+vip(mpg_randf_oob, num_features = 16, bar = FALSE)
+```
+
+We could also examine partial dependence plots to understand how a variable affects the response. This shows the effect of `Displacement`, holding all other variables at their mean.
+
+```{r}
+partial(
+  mpg_randf_oob, 
+  pred.var = "Displacement",
+  grid.resolution = 20
+  ) %>% 
+  autoplot()
+```
+
+
+Here is the same plot for `Gears`. These plots can also be created for categorical variables, but we would have to transform the variables into dummy variables first before using them in the model.
+
+```{r}
+partial(
+  mpg_randf_oob, 
+  pred.var = "Gears",
+  grid.resolution = 20
+  ) %>% 
+  autoplot()
+```
+
+# Exercises
+
+We will first explore doing bagging "by hand". First, we will add a column for observation number. (Also cleaned up names because they were causing problems in the tree functions. I think this might be why I have been getting some errors in the past.)
+
+```{r}
+cars_train2 <- cars_train %>% 
+  mutate(obs = 1:n()) %>% 
+  select(obs, everything()) %>% 
+  clean_names()
+```
+
+
+1. The following code creates 25 bootstrap random samples of the `cars_train` data.
+
+```{r}
+boots <- cars_train2 %>% 
+  bootstraps(times = 25) 
+```
+
+If you look at `boots`, you may think it looks kind of weird. It is an `rset` object. We can extract the first bootstrap sample using the code below. I've also shown that some observations are in this dataset more than once.
+
+```{r}
+boot1 <- analysis(boots$splits[[1]])
+boot1 %>% 
+  count(obs) %>% 
+  arrange(desc(n))
+```
+
+We can extract the OOB sample from the 1st bootstrap sample using the code below. These are observations that are not in the 1st bootstrap sample.
+
+```{r}
+oob1 <- assessment(boots$splits[[1]])
+oob1
+```
+
+Now, I will fit a tree to the 1st bootstrap sample. **Should I set a seed?** Notice I am not fitting a very large tree. Usually a large tree is fit. 
+
+```{r}
+my_tree <- train(
+  mpg ~ .,
+  data = boot1 %>% select(-obs, -model, -model_index), 
+  method = "rpart",
+  trControl = trainControl(method = "none"),
+  tuneGrid = data.frame(cp = .01),
+  na.action = na.omit
+)
+```
+
+I will plot the tree and add it to this [document](https://docs.google.com/document/d/10ET4xOf2GYehSS5N8k_0X14RENk6IR28k9ywhGtehac/edit?usp=sharing). I found it easiest to take a screen shot and copy and paste that into the document.
+
+```{r, fig.width=12, fig.height=7}
+rpart.plot(my_tree$finalModel, cex = 2.2, fallen.leaves = FALSE)
+```
+
+2. Each of you will do just what I did for your own bootstrap sample. Paste all the trees into this [document](https://docs.google.com/document/d/10ET4xOf2GYehSS5N8k_0X14RENk6IR28k9ywhGtehac/edit?usp=sharing).  
+
+3. When everyone is finished, examine all the trees. What looks the same about them? What is different? How would we find the OOB RMSE?
+
+
+4. Try using the bagging and random forest methods with the house data. Be sure to check that the number of trees you use is large enough that the error rate has flattened out. Use OOB error rate. What is the best number of variables to try at each split? Is there a better option than using all the variables? How does this method compare to the other methods you tried in the homework assignment?
+
+```{r}
+#Split the data into training and test groups
+set.seed(4839) #for reproducibility
+house_split <- initial_split(house_prices, 
+                             prop = .7)
+house_train <- training(house_split)
+house_test <- testing(house_split)
+```
+
+
+5. Try using `method = "ranger"`. You can read a bit more about it in the [documentation](https://topepo.github.io/caret/available-models.html) and using both the `mtry` and `min.node.size` parameters. Start with a small number of parameters at first so it doesn't take too long to run. You can always change that. 
+
+
+
+

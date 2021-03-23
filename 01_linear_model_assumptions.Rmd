@@ -1,0 +1,443 @@
+---
+title: "Linear Model Assumptions"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE)
+```
+
+# Course overview
+
+![](../images/course_flow_assumptions.png)
+
+# Build / train --> Evaluate loop
+
+![Image credit: https://bradleyboehmke.github.io/HOML/process.html](../images/modeling_process_HOML.png)
+
+
+
+# Linear Model Assumptions
+
+Recall that we can write an individual response from a linear model $y_i$ as
+
+$$
+y_i = \beta_0 + \beta_1 x_{i1} + \beta_2 x_{i2} + ... + \beta_p x_{ip} + \varepsilon_i.
+$$
+When we use a linear model, we assume 
+
+$$
+\varepsilon_i \stackrel{\text{ind}}{\sim} N(0,\sigma^2).
+$$
+
+```{r echo=FALSE}
+smry_tibble <- tibble::tibble(
+  Assumption = c("Normality", "Mean 0 / No Trend","Constant Variance / Homoscedasticity", "Independence"), 
+  `How to check` = c("Histogram or Q-Q plot", "Residuals vs. fitted values", "Residuals vs. fitted values", "Know the data"),
+  Problems = c("Inaccurate statistical inference", "Poor predictive accuracy", "Inaccurate statistical inference", "Inaccurate statistical inference"),
+  Fix = c("Transform response variable", "Transform predictor variable(s)", "Transform response variable", "Use correlated data methods")
+)
+
+knitr::kable(smry_tibble, align = "llll")
+```
+*Table adapted from Leslie Myint*
+
+# Exercises: King County house prices
+
+```{r}
+#load libraries
+library(tidyverse) #for plotting and summarizing
+library(car) #for help with transforming variables
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(moderndive) #for house_prices dataset
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+theme_set(theme_minimal()) #set theme for ggplot
+```
+
+This dataset contains house sale prices for King County, which includes Seattle. It includes homes sold between May 2014 and May 2015. This dataset was obtained from [Kaggle.com](https://www.kaggle.com/harlfoxem/housesalesprediction/data). The description of the variables in the dataset in the R help seem to be a little off. A more accurate description is provided in the image below.
+
+![](../images/house_prices_variables.png){width=400px}
+
+So that we get used to doing it, we will begin by dividing our data into a training and test dataset. We will only use the `house_train` dataset for our analysis. That keeps the `house_test` dataset pure for when we want to evaluate our top models later on.
+
+```{r}
+#Read in the data and look at a brief summary
+data("house_prices")
+house_prices %>% 
+  mutate_if(is.character, as.factor) %>% 
+  summary()
+
+#Split the data into training and test groups
+set.seed(4839) #for reproducibility
+house_split <- initial_split(house_prices, 
+                             prop = .7)
+house_train <- training(house_split)
+house_test <- testing(house_split)
+```
+
+## Part 1: Checking assumptions and seeing the results of violations
+
+1. First we will examine a small model that uses `sqft_living` to predict `price`. Create a scatterplot to examine the relationship. Be sure to remove the `eval=FALSE` from the code chunk options. How would you describe the relationship?
+
+```{r eval=FALSE}
+house_train %>% 
+  ggplot(aes(x = ???, y = ???)) +
+  geom_point(size = .5, alpha = .5) 
+```
+
+2. Below we fit model that uses `sqft_living` to predict `price` and print the model output using the `tidy()` function. Give an interpretation of the estimated slope. Is there evidence of a significant relationship?
+
+```{r}
+house_simple_lm <- lm(price ~ sqft_living, data = house_train)
+tidy(house_simple_lm)
+```
+
+
+3. Do you think the independence assumption seems reasonable in this dataset?
+
+4. Examine the other three model assumptions. The code for the plots you need have been started below (I skipped the histogram, but feel free to add it if you'd like). Be sure to address each of the three assumptions - if they are met or violated and why. Remove the `eval=FALSE`.
+
+```{r, eval=FALSE}
+augment(house_simple_lm) %>% 
+  ggplot(aes(x = ???, y = ???)) +
+  geom_smooth(color = "blue") +
+  geom_hline(yintercept = 0, color = "red")
+
+augment(house_simple_lm) %>% 
+  ggplot(aes(sample = ???)) + 
+  geom_qq() +
+  geom_qq_line()
+```
+
+
+5. We saw above that multiple assumptions were violated. This can often affect our inferences by making the SEs much bigger or smaller than they should be. We are going to show that through simulation.
+
+a. First, we are going to pretend that the `house_train` data in the entire population and that the simple model we fit above is the truth. Thus, the true/population coefficient for `sqft_living` can be pulled out like below. This is just the coefficient from the model we fit above. What is the value of `true_sqft_living`?
+
+```{r}
+#"true" coefficient of sqft_living is ...
+true_sqft_living <- 
+  tidy(house_simple_lm) %>% 
+  filter(term == "sqft_living") %>% 
+  pull(estimate)
+```
+
+b. Next, we want to take many samples (let's take 1000) from the "population", fit the model, and construct a 95\% confidence interval. How many of those  confidence intervals should contain the "true" slope?
+
+
+c. We will illustrate this first by just taking one sample. We will take samples of size 500. That is the number of observations. The code below takes a sample of size 500, fits a model that uses `sqft_living` to predict `price`, and finds a 95\% confidence interval for the slope. What is the estimated slope in this model? Is the "true"/population slope in the confidence interval? 
+
+```{r}
+set.seed(1) #for reproducibility
+samp1 <- house_train %>% sample_n(500)
+lm(price ~ sqft_living, data = samp1) %>% 
+  tidy(conf.int = TRUE) %>% 
+  select(term, estimate, conf.low, conf.high)
+```
+
+d. Now, we want to do this process many times (1000 seems like plenty). Describe what each line of code is doing. If you're not sure, you can look up the functions being used in the Help. Also, try running the code just through that line (highlight the chunk of code you want to run and press control+enter).
+
+```{r}
+many_conf_ints <-
+  house_train %>% 
+  rep_sample_n(size = 500, reps = 1000) %>% 
+  group_by(replicate) %>% 
+  do(lm(price ~ sqft_living, data = .) %>% tidy(conf.int = TRUE)) %>% 
+  ungroup() %>% 
+  filter(term == "sqft_living") %>% 
+  select(replicate, term, estimate, conf.low, conf.high)
+
+head(many_conf_ints)
+```
+
+e. How many of the confidence intervals contain the "true" `sqft_living` coefficient? Approximately how many of these intervals SHOULD contain the true coefficient?
+
+
+## Part 2: Fixing model assumptions
+
+Now that we have seen the ramifications of violations of model assumptions, we would like to try to fix the model. It has been suggested that transforming the response variable when normality and constant variance assumptions are violated and transforming predictor(s) when linearity/mean zero assumption is violated can be helpful. But which transformation should we use? In my experience, it is most common to log transform the response and either log transform or add polynomial versions of predictors. 
+
+
+1. Let's start by looking at a scatterplot matrix of the two variables in our simple model. The plot in the lower left is their scatterplot, and there are density plots of each variable in the diagonals. How would you describe each of the density plots in terms of shape, center, and spread?
+
+```{r}
+house_train %>% 
+  select(sqft_living, price) %>% 
+  ggpairs()
+```
+
+2. Now create a scatterplot matrix with variables that you create, `log_price` and `log_sqft`, that are the log of `price` and `sqft_living`, respectively. Describe the density plots and the scatterplot now.
+
+```{r}
+
+```
+
+
+3. Fit the model using the transformed variables and check the model assumptions. Do they appear to be satisfied?
+
+```{r, eval=FALSE}
+house_simple_transform <- lm(??? ~ ???, data = house_train)
+
+augment(house_simple_transform) %>% 
+  ggplot(aes(x = ???, y = ???)) +
+  geom_smooth(color = "blue") +
+  geom_hline(yintercept = 0, color = "red")
+
+augment(house_simple_transform) %>% 
+  ggplot(aes(x = ???)) +
+  geom_qq() +
+  geom_qq_line()
+```
+
+
+4. What if we didn't know how to transform the variables?
+
+**Strategies**:
+
+* Make variables more normally distributed. If they span many orders of magnitude, log is often a good idea.
+
+* Tukey and Mosteller's bulging rule and ladder of powers. (Side note,
+Mosteller is my phd [grandparent](https://genealogy.math.ndsu.nodak.edu/id.php?id=238939), and Tukey is my phd great-grandparent and author of one of my most favorite statistics quotes: "The best thing about being a statistician is that you get to play in everyone's backyard.")
+
+They suggest making the graphs between the predictors and response more linear. The image below shows four common shapes you might see and suggests how you might transform either the predictor ($x$) or response ($y$). 
+
+![](../images/tukey_mosteller_bulge_rule.png){width=400px}
+
+Image credit: [Prof. James Kirchner](http://seismo.berkeley.edu/~kirchner/eps_120/Toolkits/Toolkit_10.pdf){width=300px}
+
+These are polynomial transformations, also referred to as the "Ladder of Powers." Rung 1 means no transformation as $y^1 = y$ and $x^1 = x$. The table below shows power transformations that move you up and down the ladder. So, as an example, if you have a scatterplot like the one in the upper right (with the red arrow pointing at it), you might try a higher power of either $x$ or $y$ or both. You need to be mindful of variables that have negative values and may need to add a small amount onto the variable before doing the power transformation. 
+
+Ladder rung   | Transformation
+------------- | -------------
+2             | $y^2$, $x^2$
+1             | no transformation
+1/2           | $\sqrt{y}$, $\sqrt{x}$
+0             | $log(y)$, $log(x)$
+-1            | $\frac{1}{y}$, $\frac{1}{x}$
+
+
+
+* There are also some functions that can help you. I will not go into the detail of these functions but you can read about them on your own. The `powerTransform()` will suggest power transformations for both the predictor and response variables. Note that this is not *exactly* what I described above but is the [Yeo-Johnson transformation](https://en.wikipedia.org/wiki/Power_transform#Yeo%E2%80%93Johnson_transformation). 
+
+
+To get suggestions for how to transform predictor variables, we do the following. Inside of `cbind()`, you would name all the predictor variables separated by commas. The first set of output with the title "yjPower Transformation to Normality" will give the `Est Power` and `Rounded Pwr`. When there is more than one variable, it will list them each in a separate row. Otherwise it will call the one row `Y1`. So, below, we see the suggested power transformation of `sqft_living` is 0.0202. This is very close to 0, which translates to a log transformation.
+
+```{r}
+house_train %>% 
+  powerTransform(cbind(sqft_living) ~ 1, 
+                 data = ., family = "yjPower") %>% 
+  summary()
+```
+
+After transforming predictors, we can then see the suggested transformation of the response. We do that by writing the model formula, with any transformed predictors. Below we see the suggested power transformation of -0.1576. Since we like to stick to transformations from the ladder of powers, I would try a log transformation of `price` first.
+
+```{r}
+house_train %>% 
+  powerTransform(price ~ log(sqft_living), 
+                 data = ., family = "yjPower") %>% 
+  summary()
+```
+
+Here is an example of what the output looks like when we want to transform multiple predictor variables. 
+
+```{r}
+house_train %>% 
+  powerTransform(cbind(sqft_living, bedrooms, sqft_lot, bathrooms) ~ 1, data = ., family = "yjPower") %>% 
+  summary()
+```
+
+A cautionary note: take these all as suggested transformations! If you don't *have* to transform the variable, keep it as is. Here is my recommended path.
+
+a. Fit a model with NO transformations.  
+b. Check model assumptions. If there are violations, try transforming as few variables as possible. Use the strategies above, starting with the first and going forward.  
+c. Fit a model with transformed variables. Return to step b, if needed.
+
+
+5. Let's re-examine the "success rate" of the confidence interval after we've fixed the assumptions. 
+
+a. Again, we pretend that the `house_train` data in the entire population and that the simple transformed model we fit above (`house_simple_transform`) is the truth. Thus, the true/population coefficient for `log(sqft_living)` can be pulled out like below. What is its value?
+
+```{r, eval=FALSE}
+#"true" coefficient of log(sqft_living) is ...
+true_log_sqft_living <- 
+  tidy(house_simple_transform) %>% 
+  filter(term == "log(sqft_living)") %>% 
+  pull(estimate)
+```
+
+b. And as before, we now want to take many samples (1000 again) of size 500 from the "population", fit the model, and construct a 95\% confidence interval. How many of these intervals contain the true `log(sqft_living)` coefficient? Approximately how many of these intervals SHOULD contain the true coefficient? So, does transforming the variables seem to have helped?
+
+```{r, eval=FALSE}
+many_conf_ints_transform <-
+  house_train %>% 
+  rep_sample_n(size = 500, reps = 1000) %>% 
+  group_by(replicate) %>% 
+  do(lm(log(price) ~ log(sqft_living), data = .) %>% tidy(conf.int = TRUE)) %>% 
+  ungroup() %>% 
+  filter(term == "log(sqft_living)") %>% 
+  select(replicate, term, estimate, conf.low, conf.high)
+
+head(many_conf_ints_transform)
+```
+
+
+6. In the video, we discussed a couple other things to be careful of. We will delve into those now.
+
+a. One of them was multicollinearity. Let's look at both the actual correlation and a visual of the correlation matrix of some variables. Notice that the correlation between `log_sqft` and `log_above` is quite high, over 0.85.
+
+```{r, fig.height=2.5, fig.width=2.5}
+house_train %>%
+  mutate(log_price = log(price),
+         log_sqft = log(sqft_living),
+         log_above = log(sqft_above)) %>% 
+  select(log_price, log_sqft, log_above) %>% 
+  cor()
+
+house_train %>%
+  mutate(log_price = log(price),
+         log_sqft = log(sqft_living),
+         log_above = log(sqft_above)) %>% 
+  select(log_price, log_sqft, log_above) %>% 
+  cor() %>% 
+  corrplot(method = "circle") 
+```
+
+Below two models are fit. Something very interesting happens in the second model compared to the first. What is it? Why do you suppose this happens? Would you use `log(sqft_above)`? How about `log(sqft_living)`?
+
+```{r}
+#model with only log(sqft_above)
+lm(log(price) ~ log(sqft_above), data = house_train) %>% 
+  tidy()
+#model with log(sqft_above) and log(sqft_living)
+lm(log(price) ~ log(sqft_living) + log(sqft_above), data = house_train) %>% 
+  tidy()
+```
+
+b. The other was near-zero variance variables. The table below shows statistics for three variables that were flagged as near-zero variance, including `view`. The freqRatio gives the ratio of frequencies for the most common value over the second most common value. The percent Unique is the number of unique values for that variable divided by the total number of observations times 100. So, for `view` there are only 5 unique values. If the frequency ratio is large (the default is larger than 19) AND the percent unique is smaller than 10\%, then the variable is flagged as a potential near-zero variance variable. The video suggested that you may want to completely remove the variable or categorize it.
+
+```{r}
+house_train %>%
+  select(-price) %>% 
+  select_if(is.numeric) %>% 
+  nearZeroVar(saveMetrics = TRUE) %>% 
+  rownames_to_column(var = "variable") %>% 
+  filter(nzv) %>% 
+  select(variable, freqRatio, percentUnique) 
+```
+
+Let's take a closer look at the `view` variable:
+
+```{r}
+house_train %>% 
+  count(view)
+```
+
+In this case, since there are so many observations with a value of 0, we may just decide to make a new variable, `good_view`, that is a 0 if the view is not good (ie. when `view` is 0) and 1 otherwise. Add that variable "on-the-fly" to the house_train dataset, using the code I've started below, and give quick counts of the values it takes. We'll learn a better way to do this shortly.
+
+```{r, eval=FALSE}
+house_train %>% 
+  mutate(good_view = ???) %>% 
+  count(???)
+```
+
+## Part 3: More complexity
+
+The model we explored above was very simple, using only one predictor. Now we will explore using more than one variable. The model `house_complex` is fit below.
+
+```{r}
+house_complex <- lm(price ~ bedrooms + bathrooms + sqft_living + sqft_lot + floors +
+                      waterfront + view + condition + grade + yr_built,
+                    data = house_train)
+tidy(house_complex)
+```
+
+a. Evaluate the model assumptions using graphs. Do any assumptions appear violated? Which ones and why?
+
+```{r}
+
+```
+
+b. See if you can transform some variables to help fix the model assumptions. Use the suggestions from above. Below I've given you a quick way to make histograms of all the numeric variables in the dataset, something I find useful. After doing some transformations, check the model assumptions again. Do they now appear to be satisfied?
+
+```{r}
+house_train %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(cols = everything(),names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_wrap(vars(variable), scales = "free")
+```
+
+
+# Part 4: Using `recipes`
+
+When we make transformations to variables, we want to do it in such a way that makes it easy to make the *same* transformations to our test dataset when needed. That's where the `recipes` package comes in. There are three main steps in creating and applying feature engineering with `recipes` (Adapted from HOML, section 3.8.3):
+
+1. `recipe`: where you define your base model and feature engineering steps (using `step_???` functions) to create your blueprint.  
+2. `prepare`: estimate feature engineering parameters based on training data.  
+3. `bake`: apply the blueprint to new data (or maybe the same dataset).
+
+
+Let's do an example. First we give it the recipe, via the `recipe` function. This is the typical model formula we are used to in `lm`. If we look at the output, it isn't very interesting yet because we haven't done any transformations. But, notice, it now knows there is 1 outcome and 10 predictor variables. 
+
+```{r}
+mod_base <- recipe(price ~ bedrooms + bathrooms + sqft_living + sqft_lot + sqft_above + 
+                     floors + waterfront + view + condition + grade + yr_built,
+                    data = house_train)
+
+mod_base
+```
+
+Now, let's add a log transformation of `price` and `sqft_living`. We do this using `step_log`. There are dozens of `step_???` functions. To see them all, go to the Packages tab and click on the `recipes` package. Scroll down to the functions that begin with `step`. Click on any of them to see a more detailed description.
+
+```{r}
+mod_rec_example <- mod_base %>% 
+  step_log(price, sqft_living)
+
+mod_rec_example 
+```
+
+We perform the estimation in the `prep` step. It still is not applied to the data, though. This may seem a bit odd, but in many `step_???` functions that are more complex, we actually need to estimate something in order to do the transformation. So, the training data is used to do the estimation and `prep` keeps track of the result. 
+
+```{r}
+prep_data <- mod_rec_example %>% 
+  prep(training = house_train)
+
+prep_data
+```
+
+
+And the last step, we `bake` it! That means we apply the steps to the final dataset. In this case we'll just apply it to the training data. Note that the transformations are performed, but the variable names DO NOT change!
+
+```{r}
+prep_data %>% 
+  bake(new_data = house_train)
+```
+
+
+a. Continue the code I've started below, using `step_???` functions to make the following transformations: log `sqft_above` and `sqft_lot`, use `step_other` to lump factor levels that occur in less than 5\% of the data together as "other" for the `grade` and `condition` variables, and use `step_mutate` to add the `good_view` variable described in the previous part. 
+
+```{r, eval=FALSE}
+mod_rec <- mod_base %>% 
+  step_log(price, sqft_living, ???) %>% 
+  step_other() %>% 
+  step_mutate(good_view = ???)
+
+mod_rec
+```
+
+
+b. `prep` and `bake` the training dataset and save it to `final_house_train`. Then print the first 6 rows. Note that the variable names do not change, but they are transformed.
+
+```{r}
+```
+
+

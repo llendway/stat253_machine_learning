@@ -1,0 +1,261 @@
+---
+title: 'Model Selection via Shrinkage: LASSO'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r, echo = FALSE}
+library(tidyverse) #for plotting and summarizing
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(moderndive) #for Housing data
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+theme_set(theme_minimal())
+```
+
+# Discussion
+
+<center>
+![](../images/course_flow_assumptions.png){width=600px}
+</center>
+
+
+**Model Selection**  
+
+* Subset selection: forward and backward stepwise selection.  
+* <span style="color: red;">Shrinkage/regularization: LASSO</span>, ridge, elastic net  
+* Dimension reduction: principal components regression
+
+
+
+**Choosing a "best" model** 
+
+* Often the criteria, eg. RMSE, gives us a guideline.  Choosing a simpler model that is close (within 1 SE of smallest RMSE: $\frac{RMSESD}{\sqrt{k}}$ for k-fold CV). NOTE: I had a couple places where I mislabeled the cross-validation standard deviation as cross-validation standard error!  
+* Does it need to be interpretable by humans? Might favor a small model over a large one.  
+* Practical significance: using the MPG dataset as an example, is an RMSE of 3.15 practically different from an RMSE of 3.16?  
+* How much does it cost to collect the data?  
+* What is the result of a bad prediction? How might that effect the model we choose?
+
+
+# LASSO: Least Absolute Shrinkage and Selection Operator
+
+In ordinary least squares, the estimated coefficients, $\hat{\beta_1}, \hat{\beta_2}..., \hat{\beta_p}$, are those that minimize the residual sum of squares:
+
+$$
+RSS = \sum_{i = 1}^n \Big[y_i - \big(\beta_0 + \beta_1 x_{i1} + ... + \beta_p x_{ip} \big) \Big]^2 = \sum_{i = 1}^n \Big(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij} \Big)^2.
+$$
+
+
+LASSO finds $\hat{\beta_1}, \hat{\beta_2}..., \hat{\beta_p}$ by minimizing: 
+
+$$
+\begin{align}
+\sum_{i = 1}^n \Big(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij} \Big)^2 & + \lambda \sum_{j=1}^p |\beta_j|,  \text{  where } \lambda\ge 0 \\
+\text{RSS} \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \  & + \ \ \text{penalty}
+\end{align}
+$$
+
+
+### Competing criteria
+
+* RSS is small when coefficients fit data (ie. the more variables the better).   
+* Penalty is small when coefficients are small - it is smallest when they are all 0!  
+
+
+### Tuning $\lambda$
+
+* when $\lambda = 0$ - OLS estimates and all coefficients are included  
+* when $\lambda = \infty$ - all coefficients are 0 and a model with only an intercept  
+* choose $\lambda$ so some of the coefficients will shrink to zero. How? Use cross-validation!  
+* Because we are penalizing coefficients, it is important that we put our variables on the same scale so that coefficients are being penalized fairly.  If we didn't do this, variables that are measured on larger scales would be penalized more than those measured on smaller scales. For example, the same variable measured in pounds would be penalized more than if it were measured in ounces. In the functions we use, they will be automatically scaled to have mean zero and standard deviation one. It will also display the final coefficients in the original scale so that the model is interpretable. 
+
+# Exercises
+
+We will use the `MPG` dataset for this exercise.
+
+Load data, `set.seed()`, and split data. 
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+
+(@) Review using `lm` with `caret`
+
+
+a. Use `carat` to perform 5-fold cross-validation to estimate the test RMSE for the linear model that uses all the variables to model `MPG`. I have started the code below (remove the `eval=FALSE`).
+
+```{r, eval=FALSE}
+cars_split <- trainControl(method = ___, number = ___)
+
+set.seed(712)
+cars_cv_lm <- train(
+  ___ ~ ___,
+  data = ___,
+  method = ___,
+  trControl = ___,
+  na.action = na.omit
+)
+```
+
+b. This model fit with ordinary least squares corresponds to a special case of penalized least squares. What is the value of $\lambda$ in this special case? 
+
+c. As $\lambda$ increases, what would you expect to happen to the number of predictors that remain in the model?
+
+
+(@) Using LASSO for specific $\lambda$
+
+a. First, we will try the LASSO with $\lambda = .05$ and explore some of the output. The `method` is `"glmnet"`. Be sure to install the `glmnet` library first. The `tuneGrid` has two parameters: `alpha = 1` implements LASSO (there are two other shrinkage methods we won't discuss - ridge regression and elastic net, a mix of ridge and lasso) and `lambda` specifies the values of $\lambda$ we are interested in. Report the cross-validated RMSE from this lasso model. 
+
+```{r}
+cars_split <- trainControl(method = "cv", number = 5)
+
+set.seed(712)
+cars_cv_small <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`),
+  method = "glmnet",
+  trControl = cars_split,
+  tuneGrid = data.frame(alpha = 1, lambda = .05),
+  na.action = na.omit
+)
+```
+
+b. We can examine the coefficients of this model with the following code. The `.` are equivalent to 0's so those terms have coefficients that have shrunk to zero. How many terms have shrunk to 0?
+
+```{r}
+coefficients(cars_cv_small$finalModel, .05)
+```
+
+
+b. Now try the LASSO with $\lambda = 1$. Report the cross-validated RMSE from this lasso model. How many terms are left in this model? How do the size of the coefficients compare to the previous model?  
+
+
+```{r}
+set.seed(712)
+cars_cv_large <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`),
+  method = "glmnet",
+  trControl = cars_split,
+  tuneGrid = data.frame(alpha = 1, lambda = 1),
+  na.action = na.omit
+)
+```
+
+(@) Big picture LASSO with cross-validation: Describe using words, pictures, or pseudocode how you would use cross-validation to find the optimal $\lambda$ parameter. 
+
+(@) Next, we will use LASSO for model selection, choosing the best $\lambda$ using cross validation. Notice that we need to make a grid of possible $\lambda$ values. This can very GREATLY depending on the context! So, use this as a starting point, but you mostly likely will need to adjust. 
+
+```{r}
+lambda_grid <- 10^seq(-3, 1, length = 100)
+
+set.seed(712)
+cars_cv_lasso <- train(
+  MPG ~ .,
+  data = cars_train %>% select(-Model, -`Model Index`),
+  method = "glmnet",
+  trControl = cars_split,
+  tuneGrid = data.frame(alpha = 1, lambda = lambda_grid),
+  na.action = na.omit
+)
+```
+
+
+a. First, let's look at the cross-validation results. The `results` give us the cross-validated RMSE (and various other statistics) for each value of $\lambda$ we used. You are going to create a plot similar to this one:
+
+<center>
+![](../images/lasso_cv_rmse.png){width=400px}
+</center>
+
+It should have the following:
+
+* Cross-validated RMSE on the y-axis, $\lambda$ on the x-axis but use `scale_x_log10()`, and those pairs of points represented as points on the plot.  
+* From each ($\lambda$, cv RMSE) point extend a line segment one standard error in each direction. The estimated standard error of RMSE is $\frac{RMSESD}{\sqrt{k}}$, where $k$ is the number of folds. Check out the `geom_pointrange()` function.  
+* **CHALLENGE**: Include a horizontal line for the cv RMSE that is one standard error from the smallest cv RMSE.  
+* **CHALLENGE**: Include vertical lines for the $\lambda$ with the smallest cv RMSE and the largest $\lambda$ with a cv RMSE within one SE of the smallest cv RMSE.
+
+The following code might be useful
+```{r}
+cars_cv_lasso$results %>% head() #remove %>% head() to view all results
+
+cars_cv_lasso$bestTune$lambda 
+```
+
+b. Now we will look at some coefficients from a couple models. The code below will show the coefficients when $\lambda = .05$. Keep in mind, these are the coefficients when this value of $\lambda$ is applied the entire training dataset. Find the largest value of $\lambda$ that still has all variables in the model. How do the coefficients change from the model with all the variables fit with ordinary least squares?
+
+```{r}
+coefficients(cars_cv_lasso$finalModel, .05)
+```
+
+
+c. We would like to create a plot of the coefficients for different values of $\lambda$. We will start with only three different $\lambda$ values. The code below creates a dataset with a column for the $\lambda$s, `lambda`; a column for the term name, `term`; and a column for coefficient, `coef`. Use this dataset to create a plot with $\lambda$ on the x-axis (but use `scale_x_log10()`), the coefficent on the y-axis, and a different colored line for each term. It should look similar to the plot below, without the vertical lines.
+
+<center>
+![](../images/lasso_cv_vars.png){width=500px}
+</center>
+
+```{r}
+my_lambdas <- c(.05, .1, 1)
+
+coefs_my_lambdas <- 
+  coefficients(cars_cv_lasso$finalModel, s = my_lambdas)  %>% 
+  as.matrix() %>%  
+  t() %>% 
+  as.data.frame() %>% 
+  mutate(lambda = my_lambdas) %>% 
+  select(lambda, everything(), -`(Intercept)`) %>% 
+  pivot_longer(cols = -lambda, 
+               names_to = "term", 
+               values_to = "coef")
+
+head(coefs_my_lambdas)
+```
+
+
+d. We can obtain the coefficients from the LASSO models with all the $\lambda$ values in the following code. Make some substitutions in the code from the previous problem to create a graph for all the $\lambda$ values.
+
+```{r, eval=FALSE}
+coefficients(cars_cv_lasso$finalModel, s = lambda_grid)
+```
+
+e. Go back to the section where we examined coefficients at specific $\lambda$ values of .05 and 1. Add vertical lines to the plot you made above to indicate these $\lambda$ values. Do the coefficients estimates from the previous exercise agree with what you see in the graph? You may need to zoom in on the graph. You can do that by adding some `coord_cartesian()` details to your plot.
+
+f. **CHALLENGE** Write a function called `gg_lasso_coefs` that would create this plot automatically if you put in the name of the model as an argument. 
+
+```{r eval=FALSE}
+gg_lasso_coefs <- function(model){
+  # This is where you would put all your code for creating the plot.
+  # As a silly example, I have just made a function that returns the results
+  
+  model$results
+}
+
+gg_lasso_coefs(cars_cv_lasso)
+```
+
+(@) It's decision time. You need to choose a final LASSO model. Report your choice of $\lambda$ and the final model coefficients. Jusify why you chose the $\lambda$ you chose using statistics but possibly also contexual knowledge and practicality. How do these results compare to what you found using forward or backward selection?
+
+
+(@) More practice: The `Hitters` data in the `ISLR` package (be sure to to install and load) contains the salaries and performance measures for 322 Major League Baseball players. Use LASSO to determine the "best" predictive model of `Salary`.
+
+
+
+

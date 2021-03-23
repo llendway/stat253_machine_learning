@@ -1,0 +1,57 @@
+---
+title: 'Day 1 Activity: Predicting the price of a used car'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+Load libraries here:
+```{r}
+library(tidyverse) #for plotting and wrangling
+library(naniar) #for exploring missing values
+```
+
+Read in data here:
+```{r}
+craigslist_cars <- read_csv("https://www.dropbox.com/s/mw19jd7jxthrfsv/vehicles_close_to_mn.csv?dl=1")
+```
+
+
+## The data
+
+In this activity, you will be exploring a data set that originally came from [Kaggle](https://www.kaggle.com/austinreese/craigslist-carstrucks-data/data#vehicles.csv). The data contains information on used cars scraped from various craigslist websites across the US. It was downloaded by me on 01/17/2020. I did some minor data cleaning and only took a subset of cars from several craigslist sites in MN and WI: minneapolis / st paul, milwaukee, eau claire, la crosse, and madison. 
+
+The ultimate goal is to find a "good" set of variables to predict the price of a used car, but in this activity we will concentrate on exploring the data, which will give you an opportunity to review some STAT 155 skills. 
+
+## Examine each variable individually
+
+Do NOT use `id`, `url`, `region_url`, `image_url`, or `description`. The output below gives a high-level summary of each variable. 
+
+```{r}
+craigslist_cars %>% 
+  select(-id, -url, -region_url, -image_url, -description) %>% 
+  mutate_if(is.character, as.factor) %>% 
+  summary()
+
+```
+
+
+1. Create graphs or tables and use basic summary statistics to show the distribution of each variable and give a brief description. HINT: `ggplot`, basic `dplyr` tools like `count` and `summarize`. Also, if you are rusty in your `ggplot` skills, consider installing and loading the `esquisse` library. Once you have loaded it, click on the Addins dropdown menu and then `ggplot2` builder. This gives you an interactive interface to create plots and also provides the code!
+2. Do any of the variables have questionable or unrealistic values? Any thoughts on why? How might you fix these? HINT: Look at some of the small values of `odometer`.  
+3. How would you handle missing values? How often are missing values present? HINT: I highly recommend using some of the functions from the `naniar library, including `add_n_miss()` and `add_prop_miss()`.  
+4. How would you handle levels of categorical variables with many levels or very few observations in some levels? Might you want to combine some levels? HINT: the `forcats` functions `fct_collapse()`, `fct_explicit_na()`, `fct_lump()`, `fct_other()`, and more might be useful.
+
+## Examine relationships with `price`
+
+Create graphs to examine the relationship between potential explanatory variables and `price`. Does this highlight any new questionable values?  
+
+## Other things to think about
+
+1. These cities are close enough that someone selling a car may have decided to post their car on multiple city's craigslist site. How could we detect these duplicated cases? It is also possible that someone posted the same car on a city's craigslist site more than once.  
+2. How might you use the `description` variable in a useful way?  
+3. Should we be concerned about how the data were collected? Given the data, what types of conclusions could we make if we built the model described above?
+

@@ -1,0 +1,182 @@
+---
+title: "Linear Model Evaluation: Model Performance"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r, echo = FALSE}
+library(tidyverse) #for plotting and summarizing
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+theme_set(theme_minimal())
+```
+
+
+# Model performance and accuracy
+
+$$
+R^2 = 1 - \frac{RSS}{SST} = 1 - \frac{\sum(y_i - \hat{y}_i)^2}{\sum(y_i - \bar{y})^2}
+$$
+
+Proportion of variation in the response explained by the model. 
+
+$$
+Adj. R^2 = 1 - \Big[(1 - R^2)\frac{n-1}{n-p-1}\Big]
+$$
+
+In order for the entire piece inside square brackets to decrease (thus increasing adjusted $R^2$), the $R^2$ has to increase a large enough amount to overpower the $\frac{n-1}{n-p-1}$ fraction.
+
+$$
+RMSE = \sqrt{\frac{1}{n}\sum_{i=1}^n(y_i - \hat{y}_i)^2},
+$$
+
+Approximately the average distance between the actual and predicted values (Mean absolute error would do this exactly). Or, on average, how far off a prediction will be.
+
+There are MANY more statistics that can be used. [HOML](https://bradleyboehmke.github.io/HOML/process.html#model-eval) lists a few more.
+
+# Exercise: Model competition
+
+1. Each group will use the `cars_train` data created below to model `MPG`. These are data on 2018 vehicles from the [EPA](https://www.fueleconomy.gov/feg/download.shtml) and further cleaned and made publicly available by [Julia Silge](https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv)
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+2. Each group will try to build the "best" model to predict `MPG` using STAT 155 and 253 skills. In the end, you will only be allowed to submit **ONE** model. 
+
+
+3. When you build your models, do it like I did in the code below. So, if you make any transformations to your variables, they should happen in the mutate. Then, you will pipe into the `lm` function and you can use the new variables you created in your model. You should give the new variables good names, unlike what I did.
+
+```{r}
+cars_train_clean <- cars_train %>% 
+  mutate(silly_variable = Cylinders + 1,
+         another_silly_one = Gears/2)
+
+mod_group_lisa <- cars_train %>% 
+  mutate(silly_variable = Cylinders + 1,
+         another_silly_one = Gears/2) %>% 
+  lm(MPG ~ Displacement + silly_variable, data = .)
+
+tidy(mod_group_lisa)
+```
+
+You may find these helpful:
+
+```{r}
+glance(mod_group_lisa) %>% 
+  select(adj.r.squared)
+
+augment(mod_group_lisa) %>%
+  #may need!
+  # mutate(actual_mpg = exp(log_mpg),
+  #        fitted_mpg = exp(.fitted),
+  #        residuals = actual_mpg - fitted_mpg) %>% 
+  summarize(rmse = sqrt(mean(.resid^2)))
+```
+
+4. When I tell you to, put your group's model, adjusted $R^2$, and RMSE in this [spreadsheet](https://docs.google.com/spreadsheets/d/1tcEUPwto5Ja3JBsGcz4zii_rJPd63YCNhBrmCmm_ZsA/edit?usp=sharing), just like I did. 
+
+\
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+\
+
+**!!!!!!!!!!!!!!!!!!!!!!DO NOT LOOK AHEAD!!!!!!!!!!!!!!!!!!!!!**
+
+
+
+5. Now comes the fun part! Notice that in the previous step, we only used the `cars_train` dataset. We have entire chunk of data that has never been used in the modeling process. So, how does the model perform on that set of data? Let's check! 
+
+a. If, like me, you transformed some variables, first create the `my_test` dataset where you perform the same transformations to the `cars_test` dataset that you performed on the `cars_train` dataset. If you used
+
+b. Then, use the `augment()` function with an additional `newdata` argument to compute the RMSE on the test data. Notice that we actually have to compute the residuals, even thought the documentation for `augment()` implies it will be computed (this is a known [issue](https://github.com/tidymodels/broom/issues/124)). Add your test data RMSE to the [spreadsheet](https://docs.google.com/spreadsheets/d/1tcEUPwto5Ja3JBsGcz4zii_rJPd63YCNhBrmCmm_ZsA/edit?usp=sharing) in the "Other stat" column (I didn't want to give away the surprise).
+
+```{r}
+my_test <- cars_test %>% 
+  mutate(silly_variable = Cylinders + 1, 
+         another_silly_one = Gears/2)
+
+augment(mod_group_lisa, newdata = my_test) %>% 
+  mutate(.resid = MPG - .fitted) %>% 
+  summarize(rmse = sqrt(mean(.resid^2)))
+```
+
+
+
+
+

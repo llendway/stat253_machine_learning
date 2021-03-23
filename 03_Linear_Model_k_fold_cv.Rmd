@@ -1,0 +1,324 @@
+---
+title: "Linear Model Evaluation: K-fold Cross-validation"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r, echo = FALSE}
+library(tidyverse) #for plotting and summarizing
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+theme_set(theme_minimal())
+```
+
+# Reflection questions
+
+* (Discuss now) When to transform? Is it better NOT to transform? "Best" transformation. Using `mutate()` to transform. How to back-transform.
+
+* (Discuss a bit later) Data splitting - what % goes where, when do you do the splitting?
+
+* (Discuss later and continue into next week) How to: reduce overfitting, choose variables in our models, make a better model (especially when unfamiliar with data) 
+
+# Review our model competition from last week
+
+* First, finish reporting on your final statistics (go back to that activity if you need to), making sure to back-transform if needed. Don't try to improve your model anymore.  
+* Who had the best model when we evaluated on the training data?  
+* Who had the best model when we evaluated on the test data? Is it the same model as in the previous question? Why do you think we see this result?  
+* Are we going to continue to use the test data to evaluate our model? "No way!" says Tina Fey ... and also says Lisa Lendway and many other statistical experts. 
+
+
+```{r fig.cap="Image Credit: https://giphy.com/gifs/no-tina-fey-inside-the-actors-studio-EQTwY2NNikooM", fig.asp=.2, echo=FALSE}
+include_graphics("https://media.giphy.com/media/EQTwY2NNikooM/giphy.gif")
+```
+
+
+
+# Modeling Big Picture
+
+```{r fig.cap="Image credit: https://bradleyboehmke.github.io/HOML/process.html", fig.asp=.2, echo=FALSE}
+include_graphics("../images/modeling_process_HOML.png")
+```
+
+# $K$-fold Cross-Validation Big Picture
+
+```{r fig.cap="Image credit: https://bradleyboehmke.github.io/HOML/process.html#resampling", fig.asp=.4, fig.align='center', echo=FALSE}
+include_graphics("../images/cv_HOML.png")
+```
+
+
+# 5-fold Cross-Validation "by hand"
+
+Read in the data and do the initial split into training and testing groups. The training dataset will be used for $k$-fold cross-validation
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+## Exploratory work
+
+Examine distributions of quantitative variables:
+
+```{r}
+cars_train %>% 
+  select(-`Model Index`) %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(cols = everything(),names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_wrap(vars(variable), scales = "free")
+```
+
+Any transformations you would like to make?
+
+**Examine Distribution of some categorical variables**:
+
+```{r}
+
+```
+
+Any transformations you would like to make?
+
+## Fit a basic model and check assumptions
+
+Fit a model that uses all the variables except `Model Index`. If you already know you want to transform variables based on your exploratory work above, make those substitutions. This means you may be using a new dataset, rather than `cars_train`.
+
+```{r}
+cars_basic <- lm(MPG  ~ ., 
+                 data = cars_train %>% select(-`Model Index`))
+```
+
+**Check the model assumptions**:
+
+```{r, eval=FALSE}
+augment(cars_basic) %>% 
+  ggplot(aes(x = ___, y = ___)) +
+  geom_point() +
+  geom_smooth(se = FALSE, color = "blue") +
+  geom_hline(yintercept = ___, color = "red")
+
+augment(cars_basic) %>% 
+  ggplot() +
+  geom_qq(aes(sample = ___)) +
+  geom_qq_line()
+```
+
+Any more transformations? 
+
+## Creating the 5 folds
+
+If we wanted to do 5-fold cross validation "by hand", we would start by randomly dividing the `cars_train` (or the updated-with-transformations version of that dataset) dataset into five groups or *folds*. 
+
+The next set of code would be an option. The variable `shuffle_obs` randomly shuffles observation numbers. Once observations are shuffled up, we could put the first 1/5 in fold 1, the second 1/5 in group 2, and so on.
+
+```{r}
+set.seed(100)
+
+cars_train %>% 
+  mutate(shuffle_obs = sample(1:n(), size = n(), replace = FALSE)) %>% 
+  select(shuffle_obs, everything()) 
+```
+
+Instead of doing that, I am going to create the folds more manually. The observations in each fold were chosen randomly by one of the `caret` functions we'll talk about later. Using these observations will allow us to compare the results we are computing "by hand" to those we will compute using the `caret` functions. 
+
+```{r}
+fold1_obs <- c(4,6,8,17,23,25,27,28,35,41,45,47,49,57,60,65,70,75,76,82,99,101,107,111,113,115,116,118,121,126,133,136,161,164,184,185,190,191,192,196,201,203,209,213,219,226,229,231,234,236,241,243,244,246,247,259,266,268,271,276,282,291,293,295,297,301,302,305,308,311,312,315,317,327,328,330,332,335,338,341,353,361,370,374,375,376,381,387,389,395,396,403,412,417,421,440,453,460,470,479,480,497,502,505,508,513,515,518,530,532,537,546,549,551,556,560,564,568,572,579,582,585,588,598,612,614,617,622,624,628,634,635,637,638,639,643,644,647,656,657,671,672,677,693,695,702,705,708,711,723,724,734,751,764,765,768,782,795,797,798,801)
+
+fold2_obs <- c(1,3,16,18,20,22,29,30,40,43,46,53,68,72,74,79,83,91,95,97,98,100,102,105,114,125,130,131,134,135,139,140,145,149,150,152,165,167,173,174,178,193,200,204,205,216,221,242,249,256,264,270,280,283,290,303,318,319,321,323,336,342,343,346,350,351,362,366,367,373,378,379,380,382,393,398,399,401,405,408,413,419,429,439,442,443,444,445,465,471,476,478,483,486,492,493,498,499,501,506,512,520,522,527,533,534,535,538,540,542,545,548,555,557,561,565,575,576,578,580,581,586,595,597,599,602,604,605,606,615,621,640,642,651,661,663,669,670,674,682,683,686,687,701,704,713,719,727,731,733,736,737,741,743,762,770,777,796,800)
+
+fold3_obs <- c(9,10,12,14,19,33,36,44,51,54,56,61,62,63,64,69,86,103,112,117,119,120,137,144,151,159,162,163,176,179,181,187,194,202,211,214,215,217,218,222,233,235,237,239,248,252,258,261,262,263,273,278,281,284,287,300,306,310,313,314,320,329,339,352,359,390,392,394,397,402,407,409,411,416,418,423,428,430,434,435,436,446,448,449,452,455,461,466,469,474,481,484,495,496,503,507,509,524,525,526,529,531,539,550,553,554,562,569,574,589,591,594,600,601,607,608,609,610,613,616,620,629,630,631,641,646,653,654,658,660,662,664,666,675,685,689,696,703,707,715,717,721,722,729,735,744,745,746,756,761,763,767,769,771,772,773,779,781,791,792)
+
+fold4_obs <- c(2,5,7,24,31,38,42,48,50,55,66,67,78,81,84,89,92,94,96,104,106,109,127,128,129,132,141,143,147,148,153,157,160,170,177,186,188,189,197,198,199,208,212,223,227,230,238,240,251,255,257,260,265,267,269,274,277,279,286,288,292,294,299,304,324,334,340,344,347,348,349,354,355,356,358,365,369,377,384,386,391,404,414,415,420,424,425,427,437,438,441,447,450,456,457,458,459,462,463,473,475,482,488,494,504,514,516,517,519,523,528,541,552,559,563,566,583,587,590,592,593,603,611,625,626,627,633,636,645,649,655,659,673,679,680,698,699,706,709,712,714,720,726,728,730,732,742,747,749,752,753,755,757,776,778,780,783,784,788,790,799)
+
+fold5_obs <- c(11,13,15,21,26,32,34,37,39,52,58,59,71,73,77,80,85,87,88,90,93,108,110,122,123,124,138,142,146,154,155,156,158,166,168,169,171,172,175,180,182,183,195,206,207,210,220,224,225,228,232,245,250,253,254,272,275,285,289,296,298,307,309,316,322,325,326,331,333,337,345,357,360,363,364,368,371,372,383,385,388,400,406,410,422,426,431,432,433,451,454,464,467,468,472,477,485,487,489,490,491,500,510,511,521,536,543,544,547,558,567,570,571,573,577,584,596,618,619,623,632,648,650,652,665,667,668,676,678,681,684,688,690,691,692,694,697,700,710,716,718,725,738,739,740,748,750,754,758,759,760,766,774,775,785,786,787,789,793,794)
+
+#folds - for testing
+fold1 <- cars_train %>% 
+  slice(fold1_obs)
+
+fold2 <- cars_train %>% 
+  slice(fold2_obs)
+
+fold3 <- cars_train %>% 
+  slice(fold3_obs)
+
+fold4 <- cars_train %>% 
+  slice(fold4_obs)
+
+fold5 <- cars_train %>% 
+  slice(fold5_obs)
+
+#folds removed - for training
+no_fold1 <- cars_train %>% 
+  slice(-fold1_obs)
+
+no_fold2 <- cars_train %>% 
+  slice(-fold2_obs)
+
+no_fold3 <- cars_train %>% 
+  slice(-fold3_obs)
+
+no_fold4 <- cars_train %>% 
+  slice(-fold4_obs)
+
+no_fold5 <- cars_train %>% 
+  slice(-fold5_obs)
+```
+
+## The models
+
+We want to compare the following models. We won't use the `Model Index` or `Model` variable. The `Model` variable can be problematic since there are so many levels. We could likely improve this (use make/brand?) but won't worry about it right now.
+
+```
+1. MPG ~ Displacement + Cylinders + Gears + Transmission + Aspiration + `Lockup Torque Converter` + Drive + `Max Ethanol` + `Recommended Fuel` + `Intake Valves Per Cyl` + `Exhaust Valves Per Cyl` + `Fuel injection` 
+
+2. MPG ~ Displacement + Displacement^2
+
+3. MPG ~ Displacement + Cylinders + Transmission + Gears + Drive
+
+4. MPG ~ (Displacement + Cylinders + Transmission + Gears + Aspiration + Drive)^2 
+```
+
+## Example
+
+1. Fit the first model from above to the dataset without fold 1.
+
+```{r}
+mod1_fold1 <- lm(MPG ~ Displacement + Cylinders + Gears + Transmission + Aspiration + `Lockup Torque Converter` + Drive + `Max Ethanol` + `Recommended Fuel` + `Intake Valves Per Cyl` + `Exhaust Valves Per Cyl` + `Fuel injection`, 
+                 data = no_fold1)
+
+tidy(mod1_fold1)
+```
+
+2. Apply this model to the data in fold 1 and compute the RMSE.
+
+```{r}
+augment(mod1_fold1, newdata = fold1) %>% 
+  summarize(rmse = sqrt(mean((MPG-.fitted)^2)))
+```
+
+3. Fit the model on the entire training dataset
+
+```{r}
+mod1_all <- lm(MPG ~ Displacement + Cylinders + Gears + Transmission + Aspiration + `Lockup Torque Converter` + Drive + `Max Ethanol` + `Recommended Fuel` + `Intake Valves Per Cyl` + `Exhaust Valves Per Cyl` + `Fuel injection`, 
+                 data = cars_train)
+
+tidy(mod1_all)
+```
+
+
+## Continue the process
+
+Now, follow a similar process as above to do this for the four other folds for this model and for all five folds for the other four models. I will divide up the work by tables. After computing your table's designated RMSE's, add them to this [document](https://docs.google.com/spreadsheets/d/1lFUcp5JghG5qPgKUUlG5f6m0ncVwaIBBCdrT9nG6NFI/edit?usp=sharing) in the appropriate section's tab. 
+
+We will compute this twice for each model as well, in order to try to catch any mistakes. If the value you enter disagrees with the corresponding value in the other rep, go back and check your calculations.
+
+## Questions
+
+1. How should we choose the number of folds? What advantage does a larger number of folds (say 20) have over a small number of folds (say 3)? What advantage does a small number of folds have over a larger number?
+
+2. In order to get a more accurate estimate of error we can replicate the entire cross-validation process. Conceptually, what would that look like? Keep this in mind during the next section and think about how you might implement it. (We'll see that there is an automated way to do it as well.)
+
+
+# The `caret` package
+
+After doing all that work, we can now fully appreciate the functions we'll be using from the `caret` package (**c**lassification **a**nd **re**gression **t**raining). 
+
+There are two main functions: `trainControl()` which sets up the sampling methodology and `train()` which executes the cross-validation. The table below outlines the arguments we'll use in each of them. We will also add more arguments a little later.
+
+
+function | argument | meaning
+-------- | -------- | -------------
+`trainControl` | `method` | sampling method, usually "cv" 
+`trainControl` | `number` | number of folds in cv 
+`train` | `y ~ x1 + ... + xp` | model formula, like in `lm`
+`train` | `data` | training data after splitting into train and test 
+`train` | `method` | model fitting method (`lm` is what we'll use now but we'll add more)
+`train` | `trControl` | how to split the data, from `trainControl` 
+`train` | `na.action` | how to treat missing values, `na.omit` will remove any row with missing values
+
+
+Let's try this for the 1st model from above. First, set up the sampling.
+
+```{r}
+splits <- trainControl(method = "cv", number = 5)
+```
+
+Next, the part that executes cross-validation. We need to set a seed here since random sampling occurs during this process.
+
+```{r}
+set.seed(100) #for reproducibility
+cars_cv <- train(
+  MPG ~ Displacement + Cylinders + Gears + Transmission + Aspiration + `Lockup Torque Converter` + Drive + `Max Ethanol` + `Recommended Fuel` + `Intake Valves Per Cyl` + `Exhaust Valves Per Cyl` + `Fuel injection`,
+  data = cars_train, 
+  method = "lm",
+  trControl = splits, #result of using trainControl() function
+  na.action = na.omit
+)
+```
+
+This gives the model output for the model with lowest cross-validation error fit on the entire training dataset. Unfortunately `tidy()` doesn't work directly. :( But, with a tiny bit of code, we can make it look just like the `tidy()` output! :)
+
+```{r}
+summary(cars_cv) %>% 
+  coef() %>% 
+  as_tibble(rownames = "term") 
+```
+
+Results for each fold. This should match what is in column one of our [google doc](https://docs.google.com/spreadsheets/d/1lFUcp5JghG5qPgKUUlG5f6m0ncVwaIBBCdrT9nG6NFI/edit?usp=sharing). 
+
+```{r}
+cars_cv$resample
+```
+
+And, the cross-validation error, which is the average RMSE over all folds. We also get a standard deviation of the average RMSE. We'll talk about how we might use that when making a decision about a "best" model. These statistics are computed for you in the `$results` but we could also compute them by hand from the data in `$resample`. 
+
+```{r}
+cars_cv$results
+
+cars_cv$resample %>% 
+  summarize(cv_error = mean(RMSE),
+            sd_cv_error = sd(RMSE))
+```
+
+If we ever want to know which observations are in each fold, here is out we get that ... 
+
+```{r}
+cars_cv$control$indexOut$Resample1 
+```
+
+
+1. Use the functions in `caret` to obtain the average RMSE for the other 3 models.  
+
+2. Which model would you pick as the "best" of these four. How might the standard error of RMSE weigh into your decision?
+
+
+# But how do I build my model?
+
+Lisa, you still haven't shown us how we pick which variables to put in the model?! 
+
+I know ... we'll get there. For now, start thinking about and exploring these questions.
+
+1. How would you find the "best" model with only one variable? Try doing this "manually" with the `cars_train` dataset. 
+
+2. How would you find the "best" model with two variables? Could you use any information from the best model with one variable? Try doing this with the `cars_train` dataset. 
+
+3. How did you handle categorical variables in the questions above? Remember, when you include a categorical variable with $l$ categories, you are actually adding $l-1$ variables to your model. 
+
+

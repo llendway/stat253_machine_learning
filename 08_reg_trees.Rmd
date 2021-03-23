@@ -1,0 +1,207 @@
+---
+title: "Regression Trees"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+#plotting and exploring
+library(tidyverse) #for plotting and summarizing
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(naniar) #for exploring missing values
+library(pdp) #for partial dependence plots, MARS models
+library(rpart.plot) #for plotting decision trees
+
+#making things look nice
+library(lubridate) #for nice dates
+library(knitr) #for nice tables
+library(scales) #for nice labels on graphs
+library(gridExtra) #for arranging plots
+library(broom) #for nice model output
+
+#data
+library(ISLR) #for data
+library(moderndive) #for data
+
+#modeling
+library(rsample) #for splitting data
+library(recipes) #for keeping track of transformations
+library(caret) #for modeling
+library(leaps) #for variable selection
+library(glmnet) #for LASSO
+library(earth) #for MARS models
+library(rpart) #for decision trees
+library(vip) #NEW for importance plots
+
+theme_set(theme_minimal())
+```
+
+
+# Discussion
+
+Decision tree goals: create a (potentially very long) list of if-else rules that bin observations together such that 
+
+1. Observations within each node are similar.
+
+2. Nodes are different from one another.  
+
+Do this by finding the split that minimizes the sum of the squared residuals.
+
+Define
+
+$$
+R_1(j,s) = \{X | X_j < s\} \ \  \text{and} \ \  R_2(j,s) = \{X | X_j \ge s\}.
+$$
+
+We want to find $X_j$ (the variable) and $s$ (the value of that varible) that minimize
+
+$$
+SSE = \sum_{i: x_i \in R_1(j,s)}(y_i - \bar{y}_{R_1})^2 + \sum_{i: x_i \in R_2(j,s)}(y_i - \bar{y}_{R_2})^2.
+$$
+
+After the initial split is found, this splitting process would keep going until a reasonable stopping criteria is reached. 
+
+There are many methods to decide when to stop. We will use a parameter generically called `cp`, which stands for complexity parameter. In regression trees, the overall R-squared must increase by at least `cp` at each split. If it does not increase by at least that much, it will not create the split. We can test different values of `cp` in our usual way, using cross-validation.
+
+
+# Implementing in `caret`
+
+First, we load and split the car data. 
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+Fit the model for many `cp` values:
+
+```{r}
+set.seed(327)
+mpg_tree_cp <- train(
+  MPG ~ Displacement + Cylinders + Gears + 
+    Transmission + Aspiration + Drive,
+  data = cars_train, 
+  method = "rpart",
+  trControl = trainControl(method = "cv",
+                           number = 5),
+  tuneGrid = data.frame(cp = 10^seq(-4, -2 , 
+                                    length = 50)),
+  na.action = na.omit
+)
+```
+
+Examine the results in a plot
+
+```{r}
+mpg_tree_cp$results %>% 
+  ggplot(aes(x = cp, y = RMSE)) +
+  geom_pointrange(aes(ymin = RMSE - RMSESD/sqrt(5),
+                      ymax = RMSE + RMSESD/sqrt(5))) +
+  scale_x_log10()
+```
+
+Look at a plot of the tree (this will be the "best" tree, ie. smallest RMSE)
+
+```{r, fig.width=20, fig.height=8}
+rpart.plot(mpg_tree_cp$finalModel)
+```
+
+
+# Exercises
+
+We will use the King County house data to build a regression tree of `price`. 
+
+```{r}
+#Split the data into training and test groups
+set.seed(4839) #for reproducibility
+house_split <- initial_split(house_prices, 
+                             prop = .7)
+house_train <- training(house_split)
+house_test <- testing(house_split)
+```
+
+
+1. Fit a REALLY big model. Explain what in this code makes it fit a really big model.
+
+```{r}
+set.seed(327)
+
+house_price_big <- train(
+  price ~ . ,
+  data = house_train %>% select(-id,-sqft_living15, -sqft_lot15), 
+  method = "rpart",
+  trControl = trainControl(method = "cv",
+                           number = 5),
+  tuneGrid = data.frame(cp = 0)
+)
+```
+
+
+2. Plot the model from above (it takes a bit of time to do this). What do you think? (Remove the `eval=FALSE` if you want the results in your html file.)
+
+```{r, eval=FALSE}
+rpart.plot(house_price_big$finalModel)
+```
+
+3. Now let's create a small model. Explain what all the numbers mean in the node in the lower left. What observations fall into that node? What do the colors of the boxes mean, do you think? I also printed out the "code" version of the tree below the plot. In the plot the numbers in the rules are rounded and `lat<48` is not precise enough because ALL the homes are less than 48. But, you can see more detail in the code output.
+
+```{r}
+set.seed(327)
+
+house_price_small <- train(
+  price ~ . ,
+  data = house_train %>% select(-id,-sqft_living15, -sqft_lot15), 
+  method = "rpart",
+  trControl = trainControl(method = "cv",
+                           number = 5),
+  tuneGrid = data.frame(cp = .05)
+)
+
+rpart.plot(house_price_small$finalModel)
+```
+
+```{r}
+house_price_small$finalModel
+```
+
+4. Add lines to this plot to represent the five terminal nodes from the small tree.
+
+```{r}
+house_train %>% 
+  ggplot(aes(x = sqft_living, y=lat, color = price)) +
+  geom_point(size = .2, alpha = .5) +
+  scale_x_log10() +
+  scale_color_gradient(trans = "log")
+```
+
+5. Now, let's try evaluating some different `cp` values. Examine a plot of the tuning parameter, `cp`, versus cross-validated RMSE. Add 1SE bars to the plot as well. What `cp` parameter leads to the best model? Do you think we need to change the `cp` tuning grid? If so, do that.
+
+```{r}
+set.seed(327)
+
+house_price_tree <- train(
+  price ~ . ,
+  data = house_train %>% select(-id,-sqft_living15, -sqft_lot15), 
+  method = "rpart",
+  trControl = trainControl(method = "cv",
+                           number = 5),
+  tuneGrid = data.frame(cp = 10^seq(-4, -2 , length = 20))
+)
+
+```
+
+
+6. Create a visualization of the "best" regression tree. 
+
+
+

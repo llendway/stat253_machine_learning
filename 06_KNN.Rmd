@@ -1,0 +1,349 @@
+---
+title: "K-Nearest Neighbors"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+Load libraries and set theme here:
+```{r}
+library(tidyverse) #for plotting and summarizing
+library(lubridate) #NEW for nice dates
+library(ISLR) #for data
+library(moderndive) #for data
+library(naniar) #for exploring missing values
+library(leaps) #for variable selection
+library(broom) #for nice model output
+library(knitr) #for nice tables
+library(rsample) #for splitting data
+library(recipes) #for keeping track of any transformations we do
+library(scales) #for nice labels on graphs
+library(GGally) #for nice scatterplot matrix 
+library(ggridges) #for joy/ridge plots
+library(corrplot) #for basic correlation matrix plot
+library(caret) #for modeling
+library(gridExtra) #for arranging plots
+theme_set(theme_minimal())
+```
+
+
+## Discussion
+
+Thus far, we have mainly talked about parametric models, specifically linear models that take the form
+
+$$
+y_i = f(x_i) = \beta_0 + \beta_1 x_{i1} + \beta_2 x_{i2} + ... + \beta_p x_{ip} + \varepsilon_i.
+$$
+
+and we want to estimate the parameters $\beta_0, ..., \beta_p$. This is called a *parametric* model for that reason - we are estimating parameters!
+
+
+## Non-parametric models
+
+Build more flexible models that take the general form
+
+$$
+y_i = f(x_i) + \varepsilon.
+$$
+
+We will make very few assumptions about $f$, which gives much more freedom.
+
+### Two examples
+
+* K-Nearest Neighbors (KNN)  
+* Multivariate Adaptive Regression Splines (MARS)  
+* There are *many* other non-parametric models. This is just to give you a glimpse of what there is to offer.
+
+
+### K-Nearest Neighbors (KNN) Regression Algorithm:
+
+Given a value $K$ and a prediction point $x_0$, 
+
+* Identify the $K$ nearest neighbors of, ie. closest observations to, $x_0$, in terms of Euclidean distance
+
+$$
+\{x^{(1)}, x^{(2)}, ..., x^{(K)}\}
+$$
+
+* Observe the $y$ values of these neighbors
+
+$$
+\{y^{(1)}, y^{(2)}, ..., y^{(K)}\}
+$$
+
+* Estimate $f(x_0)$ by 
+
+$$
+\hat{f}(x_0) = \frac{1}{K} \sum_{i = 1}^K y^{(i)}
+$$
+
+**Important notes about KNN**:
+
+* The Euclidean distance between observation $x_0$ and another observation $x_l$ is
+
+$$
+\Bigg(\sum_{j = 1}^p (x_{0j} - x_{lj})^2 \Bigg)^{1/2},
+$$
+
+where $p$ is the number of variables (terms) included.
+
+* Because distances are highly dependent on the scale of the variables, all variables should be centered and scaled. Usually we center them at 0 with a standard deviation of 1.  
+
+* $K$ is the tuning parameter. Guess how we find the "best" $K$? ... cross-validation!  
+
+* The output of KNN is not a formula.  
+
+* We need access to the ENTIRE training dataset in order to find the predictions for a new observation. 
+
+## Bias-variance tradeoff 
+
+Review the bias-variance tradeoff [video](https://youtu.be/RoF_PcDUkr4) for more detail.
+
+* **Bias**: How far off are the sample models from the truth, on average? A model with high bias tends to be an oversimplified one.  
+* **Variance**: How much does the model change when it is fit to different samples of data? "Wigglier" models and overfit models tend to have high variance.
+
+
+## Exercises
+
+1. **Bias-variance tradeoff**
+
+![](../images/bias_variance_flexibility.png)
+
+Draw the diagram shown above for yourself. Try to do it without looking back at other materials. Add to it annotations of:
+
+a. What happens to bias? Variance? (think about creating separate y-axes for each of those)
+b. Where would you put ordinary least squares linear regression with all predictors (OLS), LASSO, stepwise selection, and KNN regression on this diagram? (For some of these methods, it might be best to do part c at the same time.)  
+c. All of the above methods have tuning parameters which affect the final model that results. Add to the diagram information about low/high values of the tuning parameter.
+
+2. **Simple Example: using `caret` to fit KNN models**
+
+This graph shows the real dollar to Mexican peso exchange rate over time. The variable `date_num` is the days since 2008-01-01 and `real.exchange.rate` is the "approximate" real exchange rate. (Data are from the [St. Louis Fed](https://fred.stlouisfed.org/) website). There are 2,467 observations in the dataset. The questions that follow will be about using `date_num` to model `real.exchange.rate`.
+
+```{r, fig.height=3, fig.width=10}
+exch_usd_peso <- read_csv("https://www.dropbox.com/s/77iizn4odd7wi4w/realexchangeUSMEX.csv?dl=1") %>% 
+  mutate(date_num = as.numeric(difftime(DATE, ymd("2008-01-01"))))
+
+exch_usd_peso %>% 
+  ggplot(aes(x=date_num, y=real.exchange.rate)) +
+  geom_point(size = .5)
+```
+
+a. We could try to fit a simple linear model to the data. Besides it likely not being a great fit, what is another issue?
+
+b. Open the `exch_usd_peso` dataset. What are the 4 closest neighbors for the 5th observation (whose `date_num` is 66)? Compute the Euclidean distance by hand (you can use R as a calculator) between each of them and the 5th observation.
+
+c. Let's implement KNN with 4 nearest neighbors. I have done this for you below. What is the cross-validated RMSE? The table at the bottom adds the predicted values for each observation. Create a plot that shows the original data and plots the predicted values as a line on top of the points.
+
+```{r}
+set.seed(454)
+
+#I put the trainControl() piece directly in the train() function rather than naming it separately beforehand. Now that we know what it is, I will probably continue to do it this way.
+
+knn_4 <- train(
+  real.exchange.rate ~ date_num,
+  data = exch_usd_peso,
+  method = "knn",
+  tuneGrid = data.frame(k = 4),
+  trControl = trainControl(method = "cv", number = 5),
+  na.action = na.omit
+)
+
+exch_usd_peso %>% 
+  mutate(yhat = predict(knn_4))
+```
+
+d. Now implement KNN with 20 nearest neighbors. Create a new plot that adds to the plot in (c) the predicted values from this model as a line on top of the points. Make sure the lines from 4 nearest neighbors and 20 nearest neighbors are different colors. Describe how they differ. 
+
+```{r}
+set.seed(454)
+```
+
+
+e. Describe how the predicted values are computed.  
+
+f. Fit KNN models with $K = 1, 2, ..., 20$. HINT: what needs to change from the previous code? Use the `knn_peso_many$results` to create a plot of $K$ on the x-axis versus RMSE on the y axis. Which is the best $K$ according to smallest RMSE (you can also find this in `knn_peso_many$bestTune`? 
+
+```{r, eval=FALSE}
+set.seed(454)
+knn_peso_many <- train(
+  
+)
+```
+
+
+3. **Distance issues - scale**
+
+
+a. First we examine the issue of variables being on different scales. Below I have manufactured some data that could have come from the King County house data set we have used before. Below the table of data is a matrix of distances. The value of 100.0 in the lower left corner is the Euclidean distance between observations 1 and 4. Compute the distances between observations 2 and 1 and 2 and 3 by hand to verify they are correct. What is the problem with those observations being the same distance apart?
+
+```{r}
+house_example <- tibble(obs = 1:4,
+                        bedrooms = c(2, 3, 3, 3),
+                        sqft_living = c(1000, 1000, 1001, 1100))
+
+house_example
+```
+
+```{r}
+dist(house_example %>% select(-obs), diag = TRUE) %>% 
+  round(1)
+```
+
+b. We can fix this distance issue by standardizes all the predictor variables so they have mean 0 and standard deviation one. This means we subtract the mean and divide by the standard deviation for each variable. How do the distances change when we do that?
+
+```{r}
+house_example_add <- house_example %>% 
+  mutate(bedrooms_scaled = scale(bedrooms),
+         sqft_scaled = scale(sqft_living))
+
+house_example_add
+
+house_example_add %>% 
+  select(-obs, -bedrooms, -sqft_living) %>% 
+  dist(diag = TRUE) %>% 
+  round(2)
+```
+
+c. It is easy to implement this type of change using `recipes`. Let's do this for the actual `house_train` data.
+
+```{r}
+#First, split the data
+set.seed(4839) #for reproducibility
+house_split <- initial_split(house_prices, 
+                             prop = .7)
+house_train <- training(house_split)
+house_test <- testing(house_split)
+
+#Use `step_center` and `step_scale` to center and scale all numeric variables except the response variable
+blueprint_step1 <- recipe(price ~ bedrooms + sqft_living, data = house_train) %>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+
+#First six rows of house_train
+house_train %>% 
+  select(price, bedrooms, sqft_living) %>% 
+  head()
+
+#First six rows of house train after applying center and scale to numeric variables
+prep(blueprint_step1) %>% 
+  prep() %>% 
+  bake(new_data = house_train) %>% 
+  head()
+```
+
+Notice in the tables above that the scale is different. But also notice that the distribution remains the same.
+
+```{r, fig.height=6, fig.width=4}
+p1 <- house_train %>% 
+  select(price, bedrooms, sqft_living) %>% 
+  ggplot(aes(x = sqft_living)) +
+  geom_histogram() +
+  labs(title = "sqft_living")
+
+p2 <- prep(blueprint_step1) %>% 
+  prep() %>% 
+  bake(new_data = house_train) %>% 
+  ggplot(aes(x = sqft_living)) +
+  geom_histogram() +
+  labs(title = "centered and scaled sqft_living")
+
+grid.arrange(p1, p2, ncol=1)
+```
+
+The nice thing about using `recipes` is it makes implementing those transformations in `caret`  *really* easy.
+
+```{r}
+#this takes about 10-20 seconds to run
+set.seed(876)
+knn_house1 <- train(
+  blueprint_step1, 
+  data = house_train, 
+  method = "knn", 
+  trControl = trainControl(method = "cv", number = 5), 
+  tuneGrid = data.frame(k = c(3, 5, 10, 15, 20, 30, 40, 50, 70, 100, 200)) 
+)
+```
+
+
+Use `knn_house1$results` to create a graph that plots $k$ on the x-axis and RMSE on the y axis. From each point use `geom_pointrange()` to extend a line segment one standard error in each direction. The estimated standard error of RMSE is $\frac{RMSESD}{\sqrt{l}}$, where $l$ is the number of folds (I used $l$ instead of $k$ so you don't confuse it with the $k$ for the number of neighbors.)
+
+```{r}
+
+```
+
+4. **Distance issues - categorical variables**
+
+What if we want to use categorical variables? Let's jump back to the `cars2018` data. First, do some quick exploratory work. Does it look like there is a difference in the `MPG` distribution by `Drive`?
+
+```{r}
+cars2018 <- read_csv("https://raw.githubusercontent.com/juliasilge/supervised-ML-case-studies-course/master/data/cars2018.csv")
+set.seed(345)
+cars_split <- initial_split(cars2018, prop = .7)
+cars_train <- training(cars_split)
+cars_test <- testing(cars_split)
+```
+
+```{r}
+cars_train %>% 
+  count(Drive)
+
+cars_train %>% 
+  ggplot(aes(x = MPG, fill = Drive)) +
+  geom_density(alpha = .3) +
+  scale_fill_viridis_d()
+```
+
+It turns out we need to create the dummy variables for the categorical variable in order to calculate a distance. I will do that using `recipe` functions because it will make running KNN easier. 
+
+```{r}
+#create dummy variables for any variable that is categorical (nominal), which is only Drive in this case
+blueprint_drive <- recipe(MPG ~ Drive, data = cars_train) %>%
+  step_dummy(all_nominal())
+
+#First six rows of cars_train
+cars_train %>% 
+  select(MPG, Drive) %>% 
+  head()
+
+#First six rows of cars_train after creating the dummy variables for Drive
+
+prep(blueprint_drive) %>% 
+  prep() %>% 
+  bake(new_data = cars_train) %>% 
+  head()
+```
+
+a. Use the output from above to compute the Euclidean distances between the following observations by hand: 1 & 2, 2 & 3, and 1 & 4. In general, what is the distance between two cars with the same `Drive`? And between two cars with different `Drive`? 
+
+b. We fit the KNN model below for $k=10$. Then we used the model to predict the MPG for each of the four drives. What do these predicted values correspond to? Think about how you would compute the predicted value by hand. Try using a different value of $k$. Does your answer change? Why?
+
+```{r}
+set.seed(876)
+knn_car1 <- train(
+  blueprint_drive, 
+  data = cars_train, 
+  method = "knn", 
+  trControl = trainControl(method = "cv", number = 5), 
+  tuneGrid = data.frame(k = 10) 
+)
+
+predict(knn_car1, 
+        newdata = tibble(Drive = c("2-Wheel Drive, Front", "2-Wheel Drive, Rear", "4-Wheel Drive", "All Wheel Drive")))
+```
+
+
+5. **Larger models**
+
+a. In general, when we use categorical variables in KNN models, we will need to turn them into their dummy variables first. You should get used to using `recipes` to do this because it will do a lot of work for you. For example, when we use the `predict()` function, it then knows to do those transformations. So, two steps we will always take are to `step_dummy()` all categorical variables and `step_center()` and `step_scale()` all numeric variables. Take these steps to use `Displacement`, `Drive`, `Cylinders`, `Gears`, and `Transmission`. Be sure to choose a "good" tuning grid. Start with 5-10 values spread over a large range. Then zoom into a smaller range once you have a sense of where the optimal value lies. What is your cross-validated RMSE for the "best" model? How does it compare to the cross-validated RMSE's you've seen using other methods?
+
+b. **Curse of dimensionality** Just as with parametric models, we could keep going and add more and more predictors to the model. However, the KNN algorithm is known to suffer from the "curse of dimensionality". Why? HINT: First do a quick Google search of this new term.
+
+
+c. **Curse of nonparametrics** Do you have any sense as to which features are significant predictors of your response variable?
+
+
+
